@@ -120,26 +120,62 @@ let types: Vec<_> = registered_types()
     .collect();
 ```
 
-### Per-tag emission policy
+### Per-type emission policy
+
+By default every registered type gets both a decoder and an encoder.
+That isn't always what you want: response/read-only types never need
+to be serialized back into JSON, and query filter types never need to
+be parsed *out* of JSON. Implement `BuildStrategy` to skip the
+declarations you don't need.
+
+The hooks receive the full `ElmTypeInfo`, so you can branch on the
+type name, the module path, or the free-form `tags` you set with
+`#[elm(tags = "...")]` on the struct:
 
 ```rust
+#[derive(ElmType)]
+#[elm(module = "Api.Person", name = "Person", tags = "readonly")]
+pub struct PersonApi { /* ... */ }
+
 struct MyStrategy;
 
 impl BuildStrategy for MyStrategy {
     fn should_emit_encoder(&self, info: &ElmTypeInfo) -> bool {
+        // Skip `encodePerson` for any type tagged "readonly".
         !info.has_tag("readonly")
     }
 }
 ```
 
+`tags` are deliberately just strings — pick whatever vocabulary fits
+your codebase (`"response"`, `"input"`, `"filter"`, `"upsert"`, etc.)
+and let your strategy decide what they mean.
+
 ### Choosing where `encodeMaybe` lives
 
+Elm's `Json.Encode` module doesn't ship a built-in helper for
+encoding a `Maybe a` (you'd have to write
+`case x of Just v -> encodeA v; Nothing -> Encode.null` every time).
+Most projects pull one in — usually
+[`Json.Encode.Extra.maybe`](https://package.elm-lang.org/packages/elm-community/json-extra/latest/Json-Encode-Extra#maybe)
+from `elm-community/json-extra`, but you may have your own helper in a
+project module instead. `MaybeEncoderRef` tells the builder which one
+to call.
+
 ```rust
+// Default: Json.Encode.Extra.maybe from elm-community/json-extra.
+let maybe = MaybeEncoderRef::new(vec!["Json", "Encode", "Extra"], "maybe");
+
+// Or your own helper at, say, Api.Generated.Encode.encodeMaybe:
 let maybe = MaybeEncoderRef::new(
-    vec!["Json", "Encode", "Extra"],
-    "maybe",
+    vec!["Api", "Generated", "Encode"],
+    "encodeMaybe",
 );
 ```
+
+The builder both emits the call (`maybe Encode.string value.nickname`)
+and adds the matching `import` line, so the generated module compiles
+without any extra wiring on the Elm side.
 
 ## License
 

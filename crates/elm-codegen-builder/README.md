@@ -35,19 +35,26 @@ for (module_path, group) in group_by_module(&types) {
 
 ### `BuildStrategy`
 
-Per-type policy hooks. Defaults emit both decoder and encoder for
-every type. Override per-tag rules by implementing the trait
-yourself:
+Per-type policy hooks. `DefaultStrategy` emits both a decoder and an
+encoder for every type, which isn't always what you want — read-only
+response types don't need encoders, and query filter types don't need
+decoders. Implement the trait to skip declarations based on the type
+name, module path, or the `tags` set with `#[elm(tags = "...")]`:
 
 ```rust
 struct MyStrategy;
 
 impl BuildStrategy for MyStrategy {
     fn should_emit_encoder(&self, info: &ElmTypeInfo) -> bool {
+        // Skip `encodeFoo` for any type tagged "readonly".
         !info.has_tag("readonly")
     }
 }
 ```
+
+Tags are deliberately just strings — pick whatever vocabulary fits
+your codebase (`"response"`, `"input"`, `"filter"`, `"upsert"`, etc.)
+and let your strategy decide what they mean.
 
 ### `TypeOverrides`
 
@@ -61,12 +68,22 @@ applied at derive time, before the builder ever sees the
 
 ### `MaybeEncoderRef`
 
-Where to find your `encodeMaybe` (or equivalent) helper in your Elm
-codebase. The builder emits an unqualified call to
-`function_name` and adds the matching import.
+Elm's `Json.Encode` module doesn't ship a built-in helper for encoding
+a `Maybe a`. Most projects pull one in — usually
+[`Json.Encode.Extra.maybe`](https://package.elm-lang.org/packages/elm-community/json-extra/latest/Json-Encode-Extra#maybe)
+from `elm-community/json-extra`, but you may have your own helper in a
+project module instead. `MaybeEncoderRef` tells the builder which one
+to call, and the matching `import` line is added automatically:
 
 ```rust
+// Default: Json.Encode.Extra.maybe from elm-community/json-extra.
 let maybe = MaybeEncoderRef::new(vec!["Json", "Encode", "Extra"], "maybe");
+
+// Or your own helper at, say, Api.Generated.Encode.encodeMaybe:
+let maybe = MaybeEncoderRef::new(
+    vec!["Api", "Generated", "Encode"],
+    "encodeMaybe",
+);
 ```
 
 ### `NameMap`
