@@ -1,0 +1,19 @@
+[package]
+name = "elm-codegen-cli"
+description = "Reference CLI that reads the elm-codegen-core registry and writes Elm modules."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "elm-codegen"
+path = "src/main.rs"
+
+[dependencies]
+elm-codegen-core.workspace = true
+elm-codegen-builder.workspace = true
+elm-ast.workspace = true
+clap.workspace = true
+anyhow.workspace = true

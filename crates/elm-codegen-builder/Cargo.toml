@@ -1,0 +1,15 @@
+[package]
+name = "elm-codegen-builder"
+description = "Build Elm AST modules (records, decoders, encoders, imports) from elm-codegen-core type info."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+elm-codegen-core.workspace = true
+elm-ast.workspace = true
+
+[dev-dependencies]
+elm-codegen-core = { workspace = true, features = ["derive"] }
