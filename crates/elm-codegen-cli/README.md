@@ -27,20 +27,13 @@ CLI binary doesn't otherwise reference, rustc will dead-strip them and
 the registry will be empty. The reference CLI is intentionally
 project-agnostic and *doesn't* import any user crate.
 
-The standard fix is to roll your own thin binary in your workspace:
-
-```rust
-// my-codegen/src/main.rs
-use my_schema_crate as _;            // force-link the rlib
-
-fn main() -> anyhow::Result<()> {
-    elm_codegen_cli::run()           // (or copy the CLI body inline)
-}
-```
-
-Or copy `crates/elm-codegen-cli/src/main.rs` from this repo and add
-your `use` statement at the top. The CLI's entry-point is small on
-purpose so it's easy to fork.
+If your schema lives in the same crate as your codegen entry point
+this isn't an issue, and you can use the published `elm-codegen`
+binary directly. Otherwise, the standard fix is to copy the body of
+`crates/elm-codegen-cli/src/main.rs` from this repo into your own
+binary and add a `use my_schema_crate as _;` at the top to force-link
+the schema rlib. The CLI's entry-point is small on purpose so it's
+easy to fork.
 
 ## Customization
 

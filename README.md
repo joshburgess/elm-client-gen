@@ -66,26 +66,80 @@ encodePerson value =
 
 ## Quick start
 
+### 1. Annotate your schema types
+
+In whichever crate defines your API DTOs, add `elm-codegen-core` and
+annotate the types you want exported:
+
 ```toml
+# my-schema/Cargo.toml
 [dependencies]
 elm-codegen-core = "0.1"
-
-[build-dependencies]
-elm-codegen-builder = "0.1"
 ```
 
-Annotate types throughout your crate with `#[derive(ElmType)]`, then
-either:
+```rust
+use elm_codegen_core::ElmType;
 
-1. **Use the reference CLI**: install with
-   `cargo install elm-codegen-cli`, then write a thin binary in your
-   workspace that adds `use my_schema_crate as _;` to force-link your
-   types and re-uses the CLI.
-2. **Roll your own binary**: call
-   `elm_codegen_core::registered_types()`, apply your own
-   `TypeOverrides` and `BuildStrategy`, then iterate
-   `elm_codegen_builder::group_by_module(&types)` and write each
-   module to disk.
+#[derive(ElmType)]
+#[elm(module = "Api.Person", name = "Person")]
+pub struct PersonApi { /* ... */ }
+```
+
+The `derive` feature is on by default, so `#[derive(ElmType)]` is
+re-exported from `elm-codegen-core` directly (you don't need to depend
+on `elm-codegen-derive`).
+
+### 2. Run codegen
+
+You have two options.
+
+**Option A: Roll your own binary in your workspace.** This is the
+recommended path if you need any customization (codebase-wide type
+overrides, per-tag emission rules, a custom `encodeMaybe` location):
+
+```toml
+# my-codegen/Cargo.toml
+[dependencies]
+elm-codegen-core = "0.1"
+elm-codegen-builder = "0.1"
+my-schema = { path = "../my-schema" }
+```
+
+```rust
+// my-codegen/src/main.rs
+use my_schema as _;   // force-link the schema crate (see "Linking note" below)
+
+use elm_codegen_builder::{
+    build_merged_module, group_by_module,
+    DefaultStrategy, MaybeEncoderRef, NameMap, TypeOverrides,
+};
+use elm_codegen_core::registered_types;
+
+fn main() {
+    let overrides = TypeOverrides::new();
+    let strategy = DefaultStrategy;
+    let maybe = MaybeEncoderRef::new(vec!["Json", "Encode", "Extra"], "maybe");
+
+    let types: Vec<_> = registered_types()
+        .into_iter()
+        .map(|t| overrides.apply(t))
+        .collect();
+    let names = NameMap::from_types(&types);
+
+    for (module_path, group) in group_by_module(&types) {
+        let module = build_merged_module(&module_path, &group, &names, &strategy, &maybe);
+        // ... write `elm_ast::pretty_print(&module)` to disk
+    }
+}
+```
+
+**Option B: Use the reference CLI for the simplest cases.** Install
+with `cargo install elm-codegen-cli`, then run `elm-codegen --output
+./elm/src`. Note that the published `elm-codegen` binary doesn't
+import any user crate, so it can only see types defined in crates it
+links to. In practice this means you'll still want a thin wrapper
+binary in your workspace (Option A) unless your schema lives in the
+same crate as your codegen entry point.
 
 ## Linking note
 

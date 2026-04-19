@@ -1,6 +1,7 @@
 [package]
 name = "elm-codegen-cli"
 description = "Reference CLI that reads the elm-codegen-core registry and writes Elm modules."
+readme = "README.md"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
