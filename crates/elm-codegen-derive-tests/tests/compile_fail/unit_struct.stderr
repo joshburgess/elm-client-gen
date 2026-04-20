@@ -1,0 +1,5 @@
+error: ElmType cannot be derived for unit structs
+ --> tests/compile_fail/unit_struct.rs:5:12
+  |
+5 | pub struct Empty;
+  |            ^^^^^

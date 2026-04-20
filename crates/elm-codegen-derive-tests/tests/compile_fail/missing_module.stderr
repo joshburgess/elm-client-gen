@@ -1,0 +1,5 @@
+error: missing #[elm(module = "...")] attribute
+ --> tests/compile_fail/missing_module.rs:4:12
+  |
+4 | pub struct NoModule {
+  |            ^^^^^^^^

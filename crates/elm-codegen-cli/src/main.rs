@@ -15,14 +15,12 @@
 //! default. Roll your own binary if you need to ship something
 //! preconfigured for a specific schema.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+use std::process::ExitCode;
 
-use anyhow::{Context, Result};
 use clap::Parser;
-use elm_codegen_builder::{
-    build_merged_module, group_by_module, DefaultStrategy, MaybeEncoderRef, NameMap, TypeOverrides,
-};
-use elm_codegen_core::{registered_types, ElmTypeInfo};
+use elm_codegen_cli::{run_codegen, CodegenOptions, CodegenOutcome};
+use elm_codegen_core::registered_types;
 
 #[derive(Parser)]
 #[command(name = "elm-codegen", about)]
@@ -40,86 +38,29 @@ struct Cli {
     dry_run: bool,
 }
 
-fn main() -> Result<()> {
+fn main() -> ExitCode {
     let cli = Cli::parse();
-
-    let overrides = TypeOverrides::new();
-    let strategy = DefaultStrategy;
-    let maybe = MaybeEncoderRef::new(vec!["Json", "Encode", "Extra"], "maybe");
-
-    let all = collect_types(&overrides);
-    let names = NameMap::from_types(&all);
-
-    let targets: Vec<ElmTypeInfo> = if cli.types.is_empty() {
-        all
-    } else {
-        all.into_iter()
-            .filter(|t| cli.types.iter().any(|n| n == t.type_name))
-            .collect()
+    let options = CodegenOptions {
+        output: cli.output,
+        filter_names: &cli.types,
+        dry_run: cli.dry_run,
     };
-
-    if targets.is_empty() {
-        eprintln!("No types matched. Did you `use my_schema_crate as _;` in main.rs?");
-        std::process::exit(1);
-    }
-
-    let groups = group_by_module(&targets);
-
-    if cli.dry_run {
-        for (module_path, group) in &groups {
-            let module = build_merged_module(module_path, group, &names, &strategy, &maybe);
-            println!(
-                "-- {}.elm --\n{}\n",
-                module_path.join("."),
-                elm_ast::pretty_print(&module)
-            );
+    match run_codegen(registered_types(), options) {
+        Ok(CodegenOutcome::DryRun(output)) => {
+            print!("{output}");
+            ExitCode::SUCCESS
         }
-        return Ok(());
+        Ok(CodegenOutcome::Wrote { module_count, root }) => {
+            println!(
+                "Generated {} type modules in {}",
+                module_count,
+                root.display()
+            );
+            ExitCode::SUCCESS
+        }
+        Err(err) => {
+            eprintln!("{err}");
+            ExitCode::FAILURE
+        }
     }
-
-    for (module_path, group) in &groups {
-        let module = build_merged_module(module_path, group, &names, &strategy, &maybe);
-        write_module(&cli.output, module_path, &module)?;
-        println!("Generated {}", module_path.join("."));
-    }
-    println!(
-        "\nGenerated {} type modules in {}",
-        targets.len(),
-        cli.output.display()
-    );
-    Ok(())
-}
-
-fn collect_types(overrides: &TypeOverrides) -> Vec<ElmTypeInfo> {
-    let mut types: Vec<ElmTypeInfo> = registered_types()
-        .into_iter()
-        .map(|t| overrides.apply(t))
-        .collect();
-    types.sort_by(|a, b| {
-        a.module_path
-            .cmp(&b.module_path)
-            .then_with(|| a.type_name.cmp(b.type_name))
-    });
-    types
-}
-
-fn write_module(
-    output_dir: &Path,
-    module_path: &[&str],
-    module: &elm_ast::file::ElmModule,
-) -> Result<()> {
-    let mut file_path = output_dir.to_path_buf();
-    for segment in module_path {
-        file_path.push(segment);
-    }
-    file_path.set_extension("elm");
-
-    let parent = file_path
-        .parent()
-        .with_context(|| format!("no parent directory for {}", file_path.display()))?;
-    std::fs::create_dir_all(parent)
-        .with_context(|| format!("creating directory {}", parent.display()))?;
-    std::fs::write(&file_path, elm_ast::pretty_print(module))
-        .with_context(|| format!("writing {}", file_path.display()))?;
-    Ok(())
 }

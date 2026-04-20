@@ -726,3 +726,100 @@ fn build_merged_module_renders_expected_elm() {
     assert!(rendered.contains("import Json.Encode.Extra exposing (maybe)"));
     assert!(rendered.contains("nickname : Maybe String"));
 }
+
+// ── mergeTaggedObject helper emission ───────────────────────────────
+//
+// An internally-tagged enum whose newtype variant carries another
+// object-shaped type (record struct or another internally-tagged enum)
+// must flatten the inner object's fields alongside the outer tag.
+// That's done via a private `mergeTaggedObject` helper the builder
+// emits into the module, and which the variant encoder invokes.
+
+#[derive(ElmType)]
+#[elm(module = "Api.Tagged", name = "AddressApi")]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+pub struct MergeAddressApi {
+    pub line1: String,
+    pub city: String,
+}
+
+#[derive(ElmType)]
+#[elm(module = "Api.Tagged", name = "Action")]
+#[serde(tag = "action")]
+#[allow(dead_code)]
+pub enum MergeActionApi {
+    UpdateAddress(MergeAddressApi),
+    Noop,
+}
+
+#[test]
+fn merge_tagged_object_helper_emitted_for_internally_tagged_newtype_struct() {
+    let types: Vec<ElmTypeInfo> = vec![
+        MergeAddressApi::elm_type_info(),
+        MergeActionApi::elm_type_info(),
+    ];
+    let names = NameMap::from_types(&types);
+    let strategy = DefaultStrategy;
+    let maybe = MaybeEncoderRef::new(vec!["Json", "Encode", "Extra"], "maybe");
+
+    let groups = group_by_module(&types);
+    let (module_path, group) = groups.into_iter().next().expect("one module group");
+    let module = build_merged_module(&module_path, &group, &names, &strategy, &maybe);
+    let rendered = elm_ast::pretty_print(&module);
+
+    // Helper is declared in the module.
+    assert!(
+        rendered.contains("mergeTaggedObject :"),
+        "expected mergeTaggedObject type annotation in module:\n{rendered}",
+    );
+    assert!(
+        rendered.contains("mergeTaggedObject tagKey tagValue inner"),
+        "expected mergeTaggedObject implementation:\n{rendered}",
+    );
+    // Helper body uses Decode.keyValuePairs and Encode.object to flatten.
+    assert!(
+        rendered.contains("Decode.keyValuePairs"),
+        "mergeTaggedObject should decode inner as keyValuePairs:\n{rendered}",
+    );
+    assert!(
+        rendered.contains("Encode.object"),
+        "mergeTaggedObject should rebuild via Encode.object:\n{rendered}",
+    );
+
+    // Variant encoder for UpdateAddress binds the inner payload and calls
+    // the helper with the tag key, variant name, and the inner encoded value.
+    assert!(
+        rendered.contains("UpdateAddress inner"),
+        "UpdateAddress branch should bind inner:\n{rendered}",
+    );
+    assert!(
+        rendered.contains("mergeTaggedObject \"action\" \"UpdateAddress\"")
+            || rendered.contains("mergeTaggedObject \"action\" \"UpdateAddress\" ("),
+        "UpdateAddress branch should call mergeTaggedObject with action/UpdateAddress:\n{rendered}",
+    );
+    assert!(
+        rendered.contains("encodeAddressApi inner") || rendered.contains("encodeAddressApi"),
+        "UpdateAddress branch should invoke the inner type's encoder:\n{rendered}",
+    );
+}
+
+#[test]
+fn merge_tagged_object_helper_not_emitted_when_unused() {
+    // Internally-tagged enum with only unit and struct variants (no
+    // newtype variant) should NOT pull in the mergeTaggedObject helper.
+    let types: Vec<ElmTypeInfo> = vec![UserEmailAddressApi::elm_type_info()];
+    let names = NameMap::from_types(&types);
+    let strategy = DefaultStrategy;
+    let maybe = MaybeEncoderRef::new(vec!["Json", "Encode", "Extra"], "maybe");
+
+    let groups = group_by_module(&types);
+    let (module_path, group) = groups.into_iter().next().expect("one module group");
+    let module = build_merged_module(&module_path, &group, &names, &strategy, &maybe);
+    let rendered = elm_ast::pretty_print(&module);
+
+    assert!(
+        !rendered.contains("mergeTaggedObject"),
+        "helper should not be emitted when no variant needs it:\n{rendered}",
+    );
+}

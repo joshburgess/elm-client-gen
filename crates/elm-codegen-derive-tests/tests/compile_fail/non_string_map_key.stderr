@@ -1,0 +1,5 @@
+error: ElmType only supports string-keyed maps (HashMap<String, T> / BTreeMap<String, T>); JSON objects use string keys, so non-String key types can't round-trip. Use #[elm(type = "Encode.Value")] on the field if you need an opaque blob.
+ --> tests/compile_fail/non_string_map_key.rs:7:24
+  |
+7 |     pub by_id: HashMap<i64, String>,
+  |                        ^^^

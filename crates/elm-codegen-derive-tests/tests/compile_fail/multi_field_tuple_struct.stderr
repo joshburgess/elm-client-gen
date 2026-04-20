@@ -1,0 +1,5 @@
+error: ElmType only supports single-field tuple structs (newtypes); multi-field tuple structs have no canonical JSON shape — use a struct with named fields instead
+ --> tests/compile_fail/multi_field_tuple_struct.rs:5:12
+  |
+5 | pub struct Pair(String, i32);
+  |            ^^^^

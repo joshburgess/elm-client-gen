@@ -1,0 +1,5 @@
+error: ElmType cannot be derived for unions
+ --> tests/compile_fail/union.rs:5:11
+  |
+5 | pub union Bits {
+  |           ^^^^

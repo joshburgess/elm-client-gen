@@ -66,3 +66,62 @@ impl NameMap {
         self.map.get(rust_name)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use elm_codegen_core::{ElmTypeInfo, ElmTypeKind};
+
+    fn record(
+        rust_name: &'static str,
+        type_name: &'static str,
+        module: Vec<&'static str>,
+    ) -> ElmTypeInfo {
+        ElmTypeInfo {
+            rust_name,
+            module_path: module,
+            type_name,
+            tags: vec![],
+            kind: ElmTypeKind::Record { fields: vec![] },
+        }
+    }
+
+    #[test]
+    fn from_types_builds_entry_per_type() {
+        let types = vec![
+            record("PersonApi", "Person", vec!["Api", "Person"]),
+            record("OrderApi", "Order", vec!["Api", "Order"]),
+        ];
+        let map = NameMap::from_types(&types);
+        let p = map.lookup("PersonApi").expect("Person entry");
+        assert_eq!(p.elm_name, "Person");
+        assert_eq!(p.module_path, vec!["Api", "Person"]);
+        assert_eq!(map.resolve("OrderApi"), "Order");
+    }
+
+    #[test]
+    fn resolve_falls_back_to_input_on_miss() {
+        let map = NameMap::from_types(&[]);
+        assert_eq!(map.resolve("Unknown"), "Unknown");
+        assert!(map.lookup("Unknown").is_none());
+    }
+
+    #[test]
+    fn register_adds_hand_written_entries() {
+        let mut map = NameMap::from_types(&[]);
+        map.register("Money", "Money", vec!["Api".into(), "Money".into()]);
+        let e = map.lookup("Money").expect("registered Money entry");
+        assert_eq!(e.elm_name, "Money");
+        assert_eq!(e.module_path, vec!["Api", "Money"]);
+    }
+
+    #[test]
+    fn register_overwrites_existing_entry() {
+        let types = vec![record("Overlap", "FirstName", vec!["Api", "First"])];
+        let mut map = NameMap::from_types(&types);
+        map.register("Overlap", "SecondName", vec!["Api".into(), "Second".into()]);
+        let e = map.lookup("Overlap").expect("overwrite entry");
+        assert_eq!(e.elm_name, "SecondName");
+        assert_eq!(e.module_path, vec!["Api", "Second"]);
+    }
+}

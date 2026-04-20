@@ -15,3 +15,6 @@ elm-ast.workspace = true
 
 [dev-dependencies]
 elm-codegen-core = { workspace = true, features = ["derive"] }
+elm-codegen-http = { workspace = true, features = ["derive"] }
+insta.workspace = true
+proptest.workspace = true
