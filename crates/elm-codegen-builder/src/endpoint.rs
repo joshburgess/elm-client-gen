@@ -465,6 +465,83 @@ mod tests {
         normalize_endpoint(&info);
     }
 
+    // Proptest: round-trip property for the path-template parser.
+    //
+    // Generating segments directly (rather than raw strings) keeps
+    // inputs within the grammar the parser actually handles, so
+    // shrinks produce human-readable counterexamples when something
+    // breaks. We assert: render(parse(render(segments))) equals
+    // render(segments) — i.e. normalization is a fixed point after
+    // one pass.
+    use proptest::prelude::*;
+
+    fn render_segments(segments: &[TemplateSegment<'_>]) -> String {
+        let mut out = String::from("/");
+        for (i, seg) in segments.iter().enumerate() {
+            if i > 0 {
+                out.push('/');
+            }
+            match seg {
+                TemplateSegment::Literal(l) => out.push_str(l),
+                TemplateSegment::Slot(n) => {
+                    out.push('{');
+                    out.push_str(n);
+                    out.push('}');
+                }
+            }
+        }
+        out
+    }
+
+    // ASCII identifier-ish: no '/', no '{', no '}', no empty.
+    fn literal_strategy() -> impl Strategy<Value = String> {
+        "[a-zA-Z][a-zA-Z0-9_-]{0,8}".prop_map(String::from)
+    }
+
+    fn slot_strategy() -> impl Strategy<Value = String> {
+        "[a-zA-Z_][a-zA-Z0-9_]{0,8}".prop_map(String::from)
+    }
+
+    #[derive(Clone, Debug)]
+    enum Seg {
+        Literal(String),
+        Slot(String),
+    }
+
+    fn segment_strategy() -> impl Strategy<Value = Seg> {
+        prop_oneof![
+            literal_strategy().prop_map(Seg::Literal),
+            slot_strategy().prop_map(Seg::Slot),
+        ]
+    }
+
+    proptest! {
+        #[test]
+        fn parse_path_template_roundtrips(segs in prop::collection::vec(segment_strategy(), 0..8)) {
+            let owned: Vec<TemplateSegment<'_>> = segs
+                .iter()
+                .map(|s| match s {
+                    Seg::Literal(l) => TemplateSegment::Literal(l.as_str()),
+                    Seg::Slot(n) => TemplateSegment::Slot(n.as_str()),
+                })
+                .collect();
+            let rendered = render_segments(&owned);
+            let parsed = parse_path_template(&rendered);
+            prop_assert_eq!(parsed.len(), owned.len());
+            for (a, b) in parsed.iter().zip(owned.iter()) {
+                match (a, b) {
+                    (TemplateSegment::Literal(x), TemplateSegment::Literal(y)) => {
+                        prop_assert_eq!(x, y);
+                    }
+                    (TemplateSegment::Slot(x), TemplateSegment::Slot(y)) => {
+                        prop_assert_eq!(x, y);
+                    }
+                    _ => prop_assert!(false, "segment kind mismatch"),
+                }
+            }
+        }
+    }
+
     #[test]
     fn flattens_query_body_headers_and_drops_skip() {
         let info = fixture(

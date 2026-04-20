@@ -1,0 +1,5 @@
+error: an enum can't be both #[serde(tag = "...")] and #[serde(untagged)]
+ --> tests/compile_fail/conflicting_serde_attrs.rs:7:10
+  |
+7 | pub enum Bad {
+  |          ^^^

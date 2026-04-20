@@ -8,6 +8,9 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[lib]
+path = "src/lib.rs"
+
 [[bin]]
 name = "elm-codegen"
 path = "src/main.rs"
@@ -18,3 +21,9 @@ elm-codegen-builder.workspace = true
 elm-ast.workspace = true
 clap.workspace = true
 anyhow.workspace = true
+
+[dev-dependencies]
+elm-codegen-core = { workspace = true, features = ["derive"] }
+assert_cmd.workspace = true
+predicates.workspace = true
+tempfile.workspace = true

@@ -1,0 +1,5 @@
+error: ElmType only supports 2- and 3-tuples; for higher arity wrap the values in a struct with named fields
+ --> tests/compile_fail/tuple_arity_four.rs:6:18
+  |
+6 |     pub payload: (i32, i32, i32, i32),
+  |                  ^^^^^^^^^^^^^^^^^^^^

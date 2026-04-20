@@ -1,0 +1,5 @@
+error: ElmType can't be derived on a generic type. The registry materializes one Elm declaration per Rust type, with no way to monomorphize against caller arguments. Pick one of: define a concrete wrapper struct per instantiation (e.g. `pub struct PageOfPersonApi(Page<PersonApi>)` plus `#[derive(ElmType)]` on the wrapper), or stop deriving and write the Elm types by hand for this case
+ --> tests/compile_fail/generic_struct.rs:5:16
+  |
+5 | pub struct Page<T> {
+  |                ^^^
