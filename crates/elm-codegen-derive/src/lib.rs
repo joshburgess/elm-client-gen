@@ -784,13 +784,7 @@ fn path_to_elm_repr(type_path: &TypePath) -> syn::Result<(proc_macro2::TokenStre
         // only; users with a same-named domain type should use
         // `#[elm(type = "...")]` to override.
         "Value" => Ok((quote! { elm_codegen_core::ElmTypeRepr::Value }, false)),
-        // `Patch<T>` and `PatchNullable<T>` are common JSON merge-patch
-        // wrapper types: the field may be omitted from the wire payload
-        // and (for the nullable variant) may also be `null`. Both map
-        // to Elm `Maybe T` since on the wire they look like an optional
-        // field. Recognized by name only; users with differently-named
-        // wrappers should use `#[elm(type = "...")]` overrides for now.
-        "Option" | "Patch" | "PatchNullable" => {
+        "Option" => {
             let inner = extract_single_generic_arg(segment)?;
             let (inner_tokens, _) = rust_type_to_elm_repr(&inner)?;
             Ok((

@@ -68,7 +68,7 @@ supported:
 | Serde representation | Attribute | Allowed variant shapes |
 | --- | --- | --- |
 | Internally tagged | `#[serde(tag = "type")]` | unit, newtype (1-field tuple), struct |
-| Untagged | `#[serde(untagged)]` | newtype (1-field tuple), struct |
+| Untagged | `#[serde(untagged)]` | unit, newtype (1-field tuple), struct |
 | Bare-string | *(default, unit-only enums)* | unit |
 
 Serde's default externally-tagged representation (non-unit enums with
@@ -132,7 +132,6 @@ Rust ident (or set explicitly via `#[elm(name = "...")]`).
 | `chrono::NaiveDateTime`, `chrono::NaiveTime` | `String` (bare ISO, no tz) |
 | `uuid::Uuid` | `String` |
 | `serde_json::Value` | `Json.Encode.Value` |
-| `Patch<T>`, `PatchNullable<T>` | `Maybe T` (merge-patch semantics) |
 | `Box<T>`, `Arc<T>`, `Rc<T>`, `Cow<_, T>` | same as `T` (transparent) |
 | anything else | `ElmTypeRepr::Custom("TypeName")`, resolved via the builder's `NameMap` |
 
