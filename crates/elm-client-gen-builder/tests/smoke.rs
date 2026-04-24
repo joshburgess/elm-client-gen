@@ -823,3 +823,269 @@ fn merge_tagged_object_helper_not_emitted_when_unused() {
         "helper should not be emitted when no variant needs it:\n{rendered}",
     );
 }
+
+// ── App type + decoder_step / encoder_pairs (0.3.0) ─────────────────
+//
+// `Patch<T>` stands in for any consumer-supplied wrapper that needs
+// hand-written codec helpers: a pipeline-step combinator (`patch`) and
+// a pairs-emitting encoder helper (`patchPair`). The `#[elm(type = ...)]`
+// override turns the field's Elm type into `App { head: "Patch", args: [..] }`,
+// and the consumer registers the wrapper module via
+// `NameMap::register_with_exposed` so the import emits the exact
+// helpers the rendered decoder/encoder reference.
+
+#[allow(dead_code)]
+pub struct Patch<T>(std::marker::PhantomData<T>);
+
+#[derive(ElmType)]
+#[elm(module = "Api.Profile", name = "ProfilePatch")]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+pub struct ProfilePatchApi {
+    #[elm(
+        type = "Patch String",
+        decoder_step = "patch",
+        encoder_pairs = "patchPair"
+    )]
+    pub display_name: Patch<String>,
+    pub version: i32,
+}
+
+fn render_with_patch_module(types: Vec<ElmTypeInfo>) -> String {
+    let mut names = NameMap::from_types(&types);
+    names.register_with_exposed(
+        "Patch",
+        "Patch",
+        vec!["Api".into(), "Patch".into()],
+        vec![
+            "Patch".into(),
+            "patch".into(),
+            "patchPair".into(),
+            "patchDecoder".into(),
+            "encodePatch".into(),
+        ],
+    );
+    let strategy = DefaultStrategy;
+    let maybe = MaybeEncoderRef::new(vec!["Json", "Encode", "Extra"], "maybe");
+    let groups = group_by_module(&types);
+    let (module_path, group) = groups.into_iter().next().expect("one module group");
+    let module = build_merged_module(&module_path, &group, &names, &strategy, &maybe);
+    elm_ast::pretty_print(&module)
+}
+
+#[test]
+fn app_type_repr_carries_head_and_args() {
+    use elm_client_gen_core::ElmTypeRepr;
+    let info = ProfilePatchApi::elm_type_info();
+    let display = info
+        .fields()
+        .iter()
+        .find(|f| f.elm_name == "displayName")
+        .expect("displayName field");
+    match &display.elm_type {
+        ElmTypeRepr::App { head, args } => {
+            assert_eq!(head, "Patch");
+            assert_eq!(args.len(), 1);
+            assert!(matches!(args[0], ElmTypeRepr::String));
+        }
+        other => panic!("expected App {{ head: Patch, args: [String] }}, got {other:?}"),
+    }
+    assert_eq!(display.decoder_step, Some("patch"));
+    assert_eq!(display.encoder_pairs, Some("patchPair"));
+}
+
+#[test]
+fn app_type_renders_head_with_arg_in_field_annotation() {
+    let rendered = render_with_patch_module(vec![ProfilePatchApi::elm_type_info()]);
+    // The displayName field is annotated as `Patch String`, not as a
+    // bare `Patch` ident or as `String`.
+    assert!(
+        rendered.contains("displayName : Patch String"),
+        "expected `displayName : Patch String` annotation:\n{rendered}",
+    );
+}
+
+#[test]
+fn decoder_step_emits_pipeline_step_combinator() {
+    let rendered = render_with_patch_module(vec![ProfilePatchApi::elm_type_info()]);
+    // `decoder_step = "patch"` overrides the default `required` /
+    // `optional` step. The rust_name is the JSON key (camelCase here
+    // because of `serde(rename_all = "camelCase")`) and the inner
+    // decoder is built from the App's first arg (`String`).
+    assert!(
+        rendered.contains(r#"|> patch "displayName" Decode.string"#),
+        "expected pipeline step `|> patch \"displayName\" Decode.string`:\n{rendered}",
+    );
+    // It must NOT fall back to `required "displayName" patchDecoder`.
+    assert!(
+        !rendered.contains(r#"|> required "displayName""#),
+        "decoder_step should preempt `required`:\n{rendered}",
+    );
+}
+
+#[test]
+fn encoder_pairs_wraps_body_in_list_concat() {
+    let rendered = render_with_patch_module(vec![ProfilePatchApi::elm_type_info()]);
+    // Any field with `encoder_pairs` flips the whole record encoder
+    // body to `Encode.object (List.concat [ ... ])`.
+    assert!(
+        rendered.contains("Encode.object") && rendered.contains("List.concat"),
+        "expected `Encode.object (List.concat [...])` body:\n{rendered}",
+    );
+    // The pairs field uses the helper directly with no list wrapper.
+    assert!(
+        rendered.contains(r#"patchPair "displayName" Encode.string value.displayName"#),
+        "expected pairs helper call:\n{rendered}",
+    );
+    // Plain fields are wrapped in a singleton list inside the concat.
+    assert!(
+        rendered.contains(r#"[ ( "version", Encode.int value.version ) ]"#)
+            || rendered.contains(r#"[("version", Encode.int value.version)]"#),
+        "expected plain field wrapped as singleton pair list:\n{rendered}",
+    );
+}
+
+#[test]
+fn app_type_imports_head_via_register_with_exposed() {
+    let rendered = render_with_patch_module(vec![ProfilePatchApi::elm_type_info()]);
+    // The Patch wrapper is registered with an explicit exposing list,
+    // so the import line uses it verbatim instead of the auto-derived
+    // `<elm_name> / <elm_name>Decoder / encode<elm_name>` triple.
+    let import = rendered
+        .lines()
+        .find(|l| l.contains("import Api.Patch"))
+        .unwrap_or_else(|| panic!("expected `import Api.Patch ...` line:\n{rendered}"));
+    assert!(
+        import.contains("Patch"),
+        "import should expose Patch type:\n{import}",
+    );
+    assert!(
+        import.contains("patch"),
+        "import should expose patch combinator:\n{import}",
+    );
+    assert!(
+        import.contains("patchPair"),
+        "import should expose patchPair helper:\n{import}",
+    );
+}
+
+// ── Precedence: step/pairs win over decoder/encoder ─────────────────
+//
+// The derive currently lets a user set both `decoder = "..."` and
+// `decoder_step = "..."` on the same field; the contract is that the
+// step combinator wins. Same for encoder vs encoder_pairs. Building
+// `ElmFieldInfo` by hand exercises the precedence logic without
+// piling up overlapping derive attributes.
+
+fn patch_field(
+    rust_name: &'static str,
+    custom_decoder: Option<&'static str>,
+    decoder_step: Option<&'static str>,
+    custom_encoder: Option<&'static str>,
+    encoder_pairs: Option<&'static str>,
+) -> elm_client_gen_core::ElmFieldInfo {
+    elm_client_gen_core::ElmFieldInfo {
+        rust_name,
+        elm_name: rust_name,
+        elm_type: elm_client_gen_core::ElmTypeRepr::App {
+            head: "Patch".into(),
+            args: vec![elm_client_gen_core::ElmTypeRepr::String],
+        },
+        is_optional: false,
+        custom_decoder,
+        custom_encoder,
+        decoder_step,
+        encoder_pairs,
+    }
+}
+
+fn render_record_with_fields(fields: Vec<elm_client_gen_core::ElmFieldInfo>) -> String {
+    use elm_client_gen_core::{ElmTypeInfo, ElmTypeKind};
+    let info = ElmTypeInfo {
+        rust_name: "Hand",
+        module_path: vec!["Api", "Hand"],
+        type_name: "Hand",
+        tags: vec![],
+        kind: ElmTypeKind::Record { fields },
+    };
+    render_with_patch_module(vec![info])
+}
+
+#[test]
+fn decoder_step_wins_over_custom_decoder_when_both_set() {
+    let rendered = render_record_with_fields(vec![patch_field(
+        "name",
+        Some("loserDecoder"),
+        Some("patch"),
+        None,
+        None,
+    )]);
+    assert!(
+        rendered.contains(r#"|> patch "name" Decode.string"#),
+        "decoder_step should be emitted:\n{rendered}",
+    );
+    assert!(
+        !rendered.contains("loserDecoder"),
+        "custom_decoder should be dropped when decoder_step is set:\n{rendered}",
+    );
+}
+
+#[test]
+fn encoder_pairs_wins_over_custom_encoder_when_both_set() {
+    let rendered = render_record_with_fields(vec![patch_field(
+        "name",
+        None,
+        None,
+        Some("loserEncoder"),
+        Some("patchPair"),
+    )]);
+    assert!(
+        rendered.contains(r#"patchPair "name" Encode.string value.name"#),
+        "encoder_pairs should be emitted:\n{rendered}",
+    );
+    assert!(
+        !rendered.contains("loserEncoder"),
+        "custom_encoder should be dropped when encoder_pairs is set:\n{rendered}",
+    );
+}
+
+// ── Multiple types collapse into a single import per Elm module ─────
+
+#[derive(ElmType)]
+#[elm(module = "Api.MultiPatch", name = "Left")]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+pub struct MultiPatchLeftApi {
+    #[elm(
+        type = "Patch String",
+        decoder_step = "patch",
+        encoder_pairs = "patchPair"
+    )]
+    pub left: Patch<String>,
+}
+
+#[derive(ElmType)]
+#[elm(module = "Api.MultiPatch", name = "Right")]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+pub struct MultiPatchRightApi {
+    #[elm(
+        type = "Patch String",
+        decoder_step = "patch",
+        encoder_pairs = "patchPair"
+    )]
+    pub right: Patch<String>,
+}
+
+#[test]
+fn multiple_app_fields_emit_a_single_import_for_the_wrapper_module() {
+    let rendered = render_with_patch_module(vec![
+        MultiPatchLeftApi::elm_type_info(),
+        MultiPatchRightApi::elm_type_info(),
+    ]);
+    let count = rendered.matches("import Api.Patch").count();
+    assert_eq!(
+        count, 1,
+        "expected exactly one `import Api.Patch ...` line, got {count}:\n{rendered}",
+    );
+}

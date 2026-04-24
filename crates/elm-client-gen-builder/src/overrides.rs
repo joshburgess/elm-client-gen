@@ -173,6 +173,87 @@ mod tests {
     }
 
     #[test]
+    fn recurses_into_app_args_but_leaves_head_untouched() {
+        // The wrapper head (`Patch`) is a user-supplied module name
+        // resolved via NameMap, NOT a candidate for the alias rewrite
+        // table. Aliases must only fire on the args.
+        let mut o = TypeOverrides::new();
+        o.alias("BigDecimal", ElmTypeRepr::String);
+        // Defensively register an alias that *would* rewrite the head
+        // if the implementation ever forgot to skip it.
+        o.alias("Patch", ElmTypeRepr::Int);
+
+        let app = ElmTypeRepr::App {
+            head: "Patch".into(),
+            args: vec![custom("BigDecimal")],
+        };
+        match o.rewrite(&app) {
+            ElmTypeRepr::App { head, args } => {
+                assert_eq!(head, "Patch", "head must not be rewritten");
+                assert_eq!(args.len(), 1);
+                assert!(matches!(args[0], ElmTypeRepr::String));
+            }
+            other => panic!("expected App, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn recurses_into_nested_app_args() {
+        let o = overrides();
+        let nested = ElmTypeRepr::App {
+            head: "Patch".into(),
+            args: vec![ElmTypeRepr::Maybe(Box::new(custom("BigDecimal")))],
+        };
+        match o.rewrite(&nested) {
+            ElmTypeRepr::App { args, .. } => match &args[0] {
+                ElmTypeRepr::Maybe(inner) => assert!(matches!(**inner, ElmTypeRepr::String)),
+                other => panic!("expected Maybe inside App, got {other:?}"),
+            },
+            other => panic!("expected App, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn apply_recurses_into_app_args_on_record_field() {
+        let o = overrides();
+        let info = ElmTypeInfo {
+            rust_name: "Profile",
+            module_path: vec!["Api"],
+            type_name: "Profile",
+            tags: vec![],
+            kind: ElmTypeKind::Record {
+                fields: vec![ElmFieldInfo {
+                    rust_name: "balance",
+                    elm_name: "balance",
+                    elm_type: ElmTypeRepr::App {
+                        head: "Patch".into(),
+                        args: vec![custom("BigDecimal")],
+                    },
+                    is_optional: false,
+                    custom_decoder: None,
+                    custom_encoder: None,
+                    decoder_step: Some("patch"),
+                    encoder_pairs: Some("patchPair"),
+                }],
+            },
+        };
+        let out = o.apply(info);
+        let ElmTypeKind::Record { fields } = out.kind else {
+            panic!("expected Record");
+        };
+        match &fields[0].elm_type {
+            ElmTypeRepr::App { head, args } => {
+                assert_eq!(head, "Patch");
+                assert!(matches!(args[0], ElmTypeRepr::String));
+            }
+            other => panic!("expected App, got {other:?}"),
+        }
+        // Codec hooks pass through untouched.
+        assert_eq!(fields[0].decoder_step, Some("patch"));
+        assert_eq!(fields[0].encoder_pairs, Some("patchPair"));
+    }
+
+    #[test]
     fn apply_is_idempotent_on_records() {
         let o = overrides();
         let info = ElmTypeInfo {

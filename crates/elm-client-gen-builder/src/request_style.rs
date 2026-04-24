@@ -356,10 +356,8 @@ fn elm_type_annotation(repr: &ElmTypeRepr, names: &NameMap) -> Spanned<TypeAnnot
         }
         ElmTypeRepr::App { head, args } => {
             let resolved = names.resolve(head).to_string();
-            let arg_anns: Vec<Spanned<TypeAnnotation>> = args
-                .iter()
-                .map(|a| elm_type_annotation(a, names))
-                .collect();
+            let arg_anns: Vec<Spanned<TypeAnnotation>> =
+                args.iter().map(|a| elm_type_annotation(a, names)).collect();
             tname(Box::leak(resolved.into_boxed_str()) as &str, arg_anns)
         }
     }

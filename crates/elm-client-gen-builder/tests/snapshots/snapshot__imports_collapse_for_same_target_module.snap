@@ -1,0 +1,47 @@
+---
+source: crates/elm-client-gen-builder/tests/snapshot.rs
+expression: rendered
+---
+module Snap.MultiPatch exposing
+    ( Left
+    , Right
+    , encodeLeft
+    , encodeRight
+    , leftDecoder
+    , rightDecoder
+    )
+
+import Api.Patch exposing (Patch, encodePatch, patch, patchDecoder, patchPair)
+import Json.Decode as Decode exposing (Decoder)
+import Json.Decode.Pipeline exposing (required)
+import Json.Encode as Encode exposing (Value)
+
+
+type alias Left =
+    { left : Patch String }
+
+
+leftDecoder : Decode.Decoder Left
+leftDecoder =
+    Decode.succeed Left
+        |> patch "left" Decode.string
+
+
+encodeLeft : Left -> Value
+encodeLeft value =
+    Encode.object (List.concat [ patchPair "left" Encode.string value.left ])
+
+
+type alias Right =
+    { right : Patch String }
+
+
+rightDecoder : Decode.Decoder Right
+rightDecoder =
+    Decode.succeed Right
+        |> patch "right" Decode.string
+
+
+encodeRight : Right -> Value
+encodeRight value =
+    Encode.object (List.concat [ patchPair "right" Encode.string value.right ])

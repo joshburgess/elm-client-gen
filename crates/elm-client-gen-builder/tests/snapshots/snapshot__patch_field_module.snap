@@ -1,0 +1,36 @@
+---
+source: crates/elm-client-gen-builder/tests/snapshot.rs
+expression: rendered
+---
+module Snap.Profile exposing
+    ( ProfilePatch
+    , encodeProfilePatch
+    , profilePatchDecoder
+    )
+
+import Api.Patch exposing (Patch, encodePatch, patch, patchDecoder, patchPair)
+import Json.Decode as Decode exposing (Decoder)
+import Json.Decode.Pipeline exposing (required)
+import Json.Encode as Encode exposing (Value)
+
+
+type alias ProfilePatch =
+    { displayName : Patch String
+    , version : Int
+    }
+
+
+profilePatchDecoder : Decode.Decoder ProfilePatch
+profilePatchDecoder =
+    Decode.succeed ProfilePatch
+        |> patch "displayName" Decode.string
+        |> required "version" Decode.int
+
+
+encodeProfilePatch : ProfilePatch -> Value
+encodeProfilePatch value =
+    Encode.object
+        (List.concat
+            [ patchPair "displayName" Encode.string value.displayName
+            , [ ( "version", Encode.int value.version ) ]
+            ])

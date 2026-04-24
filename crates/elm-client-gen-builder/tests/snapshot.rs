@@ -15,6 +15,10 @@ use elm_client_gen_core::{ElmType, ElmTypeInfo};
 
 fn render(types: Vec<ElmTypeInfo>) -> String {
     let names = NameMap::from_types(&types);
+    render_with_names(types, names)
+}
+
+fn render_with_names(types: Vec<ElmTypeInfo>, names: NameMap) -> String {
     let strategy = DefaultStrategy;
     let maybe = MaybeEncoderRef::new(vec!["Json", "Encode", "Extra"], "maybe");
     let groups = group_by_module(&types);
@@ -152,4 +156,87 @@ fn snapshot_merge_tagged_object_module() {
         SnapTaggedActionApi::elm_type_info(),
     ]);
     insta::assert_snapshot!("merge_tagged_object_module", rendered);
+}
+
+// ── App + decoder_step + encoder_pairs (0.3.0 wrapper hooks) ────────
+
+#[allow(dead_code)]
+pub struct SnapPatch<T>(std::marker::PhantomData<T>);
+
+#[derive(ElmType)]
+#[elm(module = "Snap.Profile", name = "ProfilePatch")]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+pub struct SnapProfilePatchApi {
+    #[elm(
+        type = "Patch String",
+        decoder_step = "patch",
+        encoder_pairs = "patchPair"
+    )]
+    pub display_name: SnapPatch<String>,
+    pub version: i32,
+}
+
+fn names_with_patch_module(types: &[ElmTypeInfo]) -> NameMap {
+    let mut names = NameMap::from_types(types);
+    names.register_with_exposed(
+        "Patch",
+        "Patch",
+        vec!["Api".into(), "Patch".into()],
+        vec![
+            "Patch".into(),
+            "patch".into(),
+            "patchPair".into(),
+            "patchDecoder".into(),
+            "encodePatch".into(),
+        ],
+    );
+    names
+}
+
+#[test]
+fn snapshot_patch_field_module() {
+    let types = vec![SnapProfilePatchApi::elm_type_info()];
+    let names = names_with_patch_module(&types);
+    let rendered = render_with_names(types, names);
+    insta::assert_snapshot!("patch_field_module", rendered);
+}
+
+// ── Multiple types share one Elm module → one collapsed import ──────
+
+#[derive(ElmType)]
+#[elm(module = "Snap.MultiPatch", name = "Left")]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+pub struct SnapMultiPatchLeftApi {
+    #[elm(
+        type = "Patch String",
+        decoder_step = "patch",
+        encoder_pairs = "patchPair"
+    )]
+    pub left: SnapPatch<String>,
+}
+
+#[derive(ElmType)]
+#[elm(module = "Snap.MultiPatch", name = "Right")]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+pub struct SnapMultiPatchRightApi {
+    #[elm(
+        type = "Patch String",
+        decoder_step = "patch",
+        encoder_pairs = "patchPair"
+    )]
+    pub right: SnapPatch<String>,
+}
+
+#[test]
+fn snapshot_imports_collapse_for_same_target_module() {
+    let types = vec![
+        SnapMultiPatchLeftApi::elm_type_info(),
+        SnapMultiPatchRightApi::elm_type_info(),
+    ];
+    let names = names_with_patch_module(&types);
+    let rendered = render_with_names(types, names);
+    insta::assert_snapshot!("imports_collapse_for_same_target_module", rendered);
 }

@@ -654,6 +654,171 @@ mod tests {
 
     // ── group_endpoints_by_module ─────────────────────────────────
 
+    // ── Import emission for App-typed fields ──────────────────────
+    //
+    // When a record field's repr is `App { head: "Patch", .. }`,
+    // `collect_custom_refs` records `Patch` and `build_imports` looks
+    // it up in the NameMap. With `register_with_exposed`, the import
+    // line uses the registered exposing list verbatim instead of the
+    // auto-derived `<elm_name> / <elm_name>Decoder / encode<elm_name>`.
+
+    fn record_with_app_field(head: &'static str, arg: ElmTypeRepr) -> ElmTypeInfo {
+        ElmTypeInfo {
+            rust_name: "R",
+            module_path: vec!["Api", "M"],
+            type_name: "R",
+            tags: vec![],
+            kind: ElmTypeKind::Record {
+                fields: vec![field(
+                    "f",
+                    ElmTypeRepr::App {
+                        head: head.to_string(),
+                        args: vec![arg],
+                    },
+                    false,
+                )],
+            },
+        }
+    }
+
+    fn render_with(types: Vec<ElmTypeInfo>, names: NameMap) -> String {
+        let strategy = DefaultStrategy;
+        let maybe = MaybeEncoderRef::new(vec!["Api", "Encode"], "encodeMaybe");
+        let refs: Vec<&ElmTypeInfo> = types.iter().collect();
+        let module = build_merged_module(&["Api", "M"], &refs, &names, &strategy, &maybe);
+        elm_ast::pretty_print(&module)
+    }
+
+    #[test]
+    fn imports_use_exposed_overrides_when_set() {
+        let types = vec![record_with_app_field("Patch", ElmTypeRepr::String)];
+        let mut names = NameMap::from_types(&types);
+        names.register_with_exposed(
+            "Patch",
+            "Patch",
+            vec!["Api".into(), "Patch".into()],
+            vec!["Patch".into(), "patch".into(), "patchPair".into()],
+        );
+        let rendered = render_with(types, names);
+        let import = rendered
+            .lines()
+            .find(|l| l.contains("import Api.Patch"))
+            .unwrap_or_else(|| panic!("expected `import Api.Patch ...`:\n{rendered}"));
+        assert!(import.contains("Patch"), "{import}");
+        assert!(import.contains("patch"), "{import}");
+        assert!(import.contains("patchPair"), "{import}");
+        // Auto-derived names that the override list doesn't include
+        // must NOT leak through.
+        assert!(
+            !import.contains("patchDecoder"),
+            "auto-derived patchDecoder should not appear when overrides are set:\n{import}",
+        );
+        assert!(
+            !import.contains("encodePatch"),
+            "auto-derived encodePatch should not appear when overrides are set:\n{import}",
+        );
+    }
+
+    #[test]
+    fn imports_fall_back_to_auto_names_without_overrides() {
+        // Without `exposed_overrides`, the import exposes the
+        // auto-derived triple `<elm_name>`, `<elm_name>Decoder`,
+        // `encode<elm_name>` (the last only if the module emits any
+        // encoder, which a record always does).
+        let types = vec![record_with_app_field("Wrap", ElmTypeRepr::String)];
+        let mut names = NameMap::from_types(&types);
+        names.register("Wrap", "Wrap", vec!["Api".into(), "Wrap".into()]);
+        let rendered = render_with(types, names);
+        let import = rendered
+            .lines()
+            .find(|l| l.contains("import Api.Wrap"))
+            .unwrap_or_else(|| panic!("expected `import Api.Wrap ...`:\n{rendered}"));
+        assert!(import.contains("Wrap"), "{import}");
+        assert!(import.contains("wrapDecoder"), "{import}");
+        assert!(import.contains("encodeWrap"), "{import}");
+    }
+
+    #[test]
+    fn imports_skip_self_references_to_current_module() {
+        // A record in `Api.M` that references another type in the same
+        // module path must not emit `import Api.M ...` for itself.
+        let types = vec![record_with_app_field("Patch", ElmTypeRepr::String)];
+        let mut names = NameMap::from_types(&types);
+        names.register_with_exposed(
+            "Patch",
+            "Patch",
+            vec!["Api".into(), "M".into()],
+            vec!["Patch".into(), "patch".into()],
+        );
+        let rendered = render_with(types, names);
+        assert!(
+            !rendered.contains("import Api.M"),
+            "self-import should be suppressed:\n{rendered}",
+        );
+    }
+
+    #[test]
+    fn imports_collapse_multiple_app_refs_into_one_per_module() {
+        // Two fields, each referencing a different wrapper type that
+        // happen to live in the *same* Elm module. They must merge
+        // into a single import with a unioned exposing list.
+        let info = ElmTypeInfo {
+            rust_name: "R",
+            module_path: vec!["Api", "M"],
+            type_name: "R",
+            tags: vec![],
+            kind: ElmTypeKind::Record {
+                fields: vec![
+                    field(
+                        "f1",
+                        ElmTypeRepr::App {
+                            head: "Patch".into(),
+                            args: vec![ElmTypeRepr::String],
+                        },
+                        false,
+                    ),
+                    field(
+                        "f2",
+                        ElmTypeRepr::App {
+                            head: "PatchNullable".into(),
+                            args: vec![ElmTypeRepr::Int],
+                        },
+                        false,
+                    ),
+                ],
+            },
+        };
+        let types = vec![info];
+        let mut names = NameMap::from_types(&types);
+        names.register_with_exposed(
+            "Patch",
+            "Patch",
+            vec!["Api".into(), "Patch".into()],
+            vec!["Patch".into(), "patch".into()],
+        );
+        names.register_with_exposed(
+            "PatchNullable",
+            "PatchNullable",
+            vec!["Api".into(), "Patch".into()],
+            vec!["PatchNullable".into(), "patchNullable".into()],
+        );
+        let rendered = render_with(types, names);
+        let count = rendered.matches("import Api.Patch ").count()
+            + rendered.matches("import Api.Patch\n").count();
+        assert_eq!(
+            count, 1,
+            "expected exactly one `import Api.Patch ...`:\n{rendered}",
+        );
+        let import = rendered
+            .lines()
+            .find(|l| l.contains("import Api.Patch"))
+            .expect("import line");
+        assert!(import.contains("Patch"), "{import}");
+        assert!(import.contains("patch"), "{import}");
+        assert!(import.contains("PatchNullable"), "{import}");
+        assert!(import.contains("patchNullable"), "{import}");
+    }
+
     #[test]
     fn group_endpoints_by_module_partitions_and_sorts_alphabetically() {
         let endpoints = vec![

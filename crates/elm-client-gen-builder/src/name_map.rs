@@ -165,4 +165,72 @@ mod tests {
         assert_eq!(e.elm_name, "SecondName");
         assert_eq!(e.module_path, vec!["Api", "Second"]);
     }
+
+    #[test]
+    fn register_with_exposed_records_overrides_verbatim() {
+        let mut map = NameMap::from_types(&[]);
+        map.register_with_exposed(
+            "Patch",
+            "Patch",
+            vec!["Api".into(), "Patch".into()],
+            vec!["Patch".into(), "patch".into(), "patchPair".into()],
+        );
+        let e = map.lookup("Patch").expect("Patch entry");
+        assert_eq!(e.elm_name, "Patch");
+        assert_eq!(e.module_path, vec!["Api", "Patch"]);
+        assert_eq!(
+            e.exposed_overrides.as_deref(),
+            Some(
+                &[
+                    "Patch".to_string(),
+                    "patch".to_string(),
+                    "patchPair".to_string()
+                ][..]
+            ),
+        );
+    }
+
+    #[test]
+    fn register_leaves_exposed_overrides_unset() {
+        let mut map = NameMap::from_types(&[]);
+        map.register("Money", "Money", vec!["Api".into(), "Money".into()]);
+        let e = map.lookup("Money").expect("Money entry");
+        assert!(
+            e.exposed_overrides.is_none(),
+            "register() must not set exposed_overrides — it's reserved for the with_exposed variant",
+        );
+    }
+
+    #[test]
+    fn register_with_exposed_overwrites_prior_register_entry() {
+        let mut map = NameMap::from_types(&[]);
+        map.register("Patch", "Patch", vec!["Old".into()]);
+        map.register_with_exposed(
+            "Patch",
+            "Patch",
+            vec!["Api".into(), "Patch".into()],
+            vec!["Patch".into(), "patch".into()],
+        );
+        let e = map.lookup("Patch").expect("Patch entry");
+        assert_eq!(e.module_path, vec!["Api", "Patch"]);
+        assert!(e.exposed_overrides.is_some());
+    }
+
+    #[test]
+    fn register_overwrites_prior_register_with_exposed_entry() {
+        let mut map = NameMap::from_types(&[]);
+        map.register_with_exposed(
+            "Patch",
+            "Patch",
+            vec!["Api".into(), "Patch".into()],
+            vec!["Patch".into(), "patch".into()],
+        );
+        map.register("Patch", "Patch", vec!["Other".into()]);
+        let e = map.lookup("Patch").expect("Patch entry");
+        assert_eq!(e.module_path, vec!["Other"]);
+        assert!(
+            e.exposed_overrides.is_none(),
+            "plain register() should clear any prior exposed_overrides",
+        );
+    }
 }

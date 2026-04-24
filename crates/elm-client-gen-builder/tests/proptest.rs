@@ -3,7 +3,9 @@
 //! generating random inputs and asserting laws the code must hold
 //! for every well-formed input.
 
-use elm_client_gen_builder::{group_by_module, TypeOverrides};
+use elm_client_gen_builder::{
+    build_merged_module, group_by_module, DefaultStrategy, MaybeEncoderRef, NameMap, TypeOverrides,
+};
 use elm_client_gen_core::{
     ElmFieldInfo, ElmTypeInfo, ElmTypeKind, ElmTypeRepr, ElmVariantInfo, ElmVariantPayload,
     EnumRepresentation,
@@ -36,7 +38,22 @@ fn repr_strategy() -> impl Strategy<Value = ElmTypeRepr> {
             inner.clone().prop_map(|r| ElmTypeRepr::Maybe(Box::new(r))),
             inner.clone().prop_map(|r| ElmTypeRepr::List(Box::new(r))),
             inner.clone().prop_map(|r| ElmTypeRepr::Dict(Box::new(r))),
-            prop::collection::vec(inner, 2..4).prop_map(ElmTypeRepr::Tuple),
+            prop::collection::vec(inner.clone(), 2..4).prop_map(ElmTypeRepr::Tuple),
+            // Type application with a single arg. Head names are drawn
+            // from a small fixed pool that doubles as wrapper-module
+            // identifiers in the import-dedupe property below.
+            (
+                prop_oneof![
+                    Just("Patch".to_string()),
+                    Just("PatchNullable".to_string()),
+                    Just("Translated".to_string()),
+                ],
+                inner
+            )
+                .prop_map(|(head, arg)| ElmTypeRepr::App {
+                    head,
+                    args: vec![arg],
+                }),
         ]
     })
 }
@@ -145,6 +162,96 @@ proptest! {
             for m in members {
                 let member_path: Vec<&str> = m.module_path.to_vec();
                 prop_assert_eq!(&member_path, key);
+            }
+        }
+    }
+}
+
+// ── Import dedupe: at most one import line per target module ────────
+//
+// `build_merged_module` collects custom refs across every emitted type,
+// groups them by target module path, and emits one import per group
+// (unioning their exposing lists). The property: regardless of how
+// many fields reference the same wrapper, the rendered module never
+// contains more than one `import Api.Wrapper...` line per wrapper.
+
+const WRAPPER_POOL: &[&str] = &["WrapperA", "WrapperB", "WrapperC"];
+const FIELD_NAMES: &[&str] = &["f0", "f1", "f2", "f3", "f4", "f5"];
+
+fn record_with_wrapper_fields(wrapper_indices: &[u8], field_arg: ElmTypeRepr) -> ElmTypeInfo {
+    let fields: Vec<ElmFieldInfo> = wrapper_indices
+        .iter()
+        .enumerate()
+        .map(|(i, idx)| ElmFieldInfo {
+            rust_name: FIELD_NAMES[i],
+            elm_name: FIELD_NAMES[i],
+            elm_type: ElmTypeRepr::App {
+                head: WRAPPER_POOL[*idx as usize].to_string(),
+                args: vec![field_arg.clone()],
+            },
+            is_optional: false,
+            custom_decoder: None,
+            custom_encoder: None,
+            decoder_step: Some("step"),
+            encoder_pairs: Some("stepPair"),
+        })
+        .collect();
+    ElmTypeInfo {
+        rust_name: "R",
+        module_path: vec!["Api", "R"],
+        type_name: "R",
+        tags: vec![],
+        kind: ElmTypeKind::Record { fields },
+    }
+}
+
+fn names_for_wrapper_pool(types: &[ElmTypeInfo]) -> NameMap {
+    let mut names = NameMap::from_types(types);
+    for w in WRAPPER_POOL {
+        names.register_with_exposed(
+            (*w).to_string(),
+            (*w).to_string(),
+            vec!["Api".into(), (*w).to_string()],
+            vec![(*w).to_string(), "step".into(), "stepPair".into()],
+        );
+    }
+    names
+}
+
+proptest! {
+    #[test]
+    fn build_merged_module_emits_at_most_one_import_per_wrapper_module(
+        wrapper_indices in prop::collection::vec(0u8..(WRAPPER_POOL.len() as u8), 0..FIELD_NAMES.len()),
+        arg in repr_strategy(),
+    ) {
+        let info = record_with_wrapper_fields(&wrapper_indices, arg);
+        let types = vec![info];
+        let names = names_for_wrapper_pool(&types);
+        let strategy = DefaultStrategy;
+        let maybe = MaybeEncoderRef::new(vec!["Json", "Encode", "Extra"], "maybe");
+        let groups = group_by_module(&types);
+        let (module_path, group) = groups.into_iter().next().expect("one module group");
+        let module = build_merged_module(&module_path, &group, &names, &strategy, &maybe);
+        let rendered = elm_ast::pretty_print(&module);
+
+        for w in WRAPPER_POOL {
+            let needle = format!("import Api.{w}");
+            let count = rendered.matches(needle.as_str()).count();
+            prop_assert!(
+                count <= 1,
+                "wrapper {w} imported {count} times in:\n{rendered}",
+            );
+            // If at least one field references this wrapper, the import
+            // must be emitted exactly once (not zero).
+            let referenced = wrapper_indices
+                .iter()
+                .any(|idx| WRAPPER_POOL[*idx as usize] == *w);
+            if referenced {
+                prop_assert_eq!(
+                    count, 1,
+                    "wrapper {} referenced but not imported in:\n{}",
+                    w, rendered,
+                );
             }
         }
     }
