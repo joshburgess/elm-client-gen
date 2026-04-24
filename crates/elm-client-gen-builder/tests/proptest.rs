@@ -57,6 +57,8 @@ fn wrap_in_record(repr: ElmTypeRepr) -> ElmTypeInfo {
                 is_optional: false,
                 custom_decoder: None,
                 custom_encoder: None,
+                decoder_step: None,
+                encoder_pairs: None,
             }],
         },
     }

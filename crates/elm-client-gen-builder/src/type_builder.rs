@@ -33,6 +33,17 @@ fn build_type_annotation(repr: &ElmTypeRepr, names: &NameMap) -> Spanned<TypeAnn
             let elm_name = names.resolve(rust_name);
             tname(elm_name, vec![])
         }
+        // `Head Arg1 Arg2 ...`. The head is resolved through NameMap so
+        // user-supplied wrapper types (`Patch`, `PatchNullable`, ...) are
+        // correctly named and imported. Each arg is rendered recursively.
+        ElmTypeRepr::App { head, args } => {
+            let elm_head = names.resolve(head);
+            let arg_annotations: Vec<Spanned<TypeAnnotation>> = args
+                .iter()
+                .map(|a| build_type_annotation(a, names))
+                .collect();
+            tname(elm_head, arg_annotations)
+        }
     }
 }
 

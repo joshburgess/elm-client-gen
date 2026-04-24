@@ -354,6 +354,14 @@ fn elm_type_annotation(repr: &ElmTypeRepr, names: &NameMap) -> Spanned<TypeAnnot
             let resolved = names.resolve(rust).to_string();
             tname(Box::leak(resolved.into_boxed_str()) as &str, vec![])
         }
+        ElmTypeRepr::App { head, args } => {
+            let resolved = names.resolve(head).to_string();
+            let arg_anns: Vec<Spanned<TypeAnnotation>> = args
+                .iter()
+                .map(|a| elm_type_annotation(a, names))
+                .collect();
+            tname(Box::leak(resolved.into_boxed_str()) as &str, arg_anns)
+        }
     }
 }
 
@@ -482,6 +490,15 @@ fn elm_type_name(repr: &ElmTypeRepr, names: &NameMap) -> String {
         ElmTypeRepr::Tuple(elems) => {
             let inner: Vec<String> = elems.iter().map(|e| elm_type_name(e, names)).collect();
             format!("({})", inner.join(", "))
+        }
+        ElmTypeRepr::App { head, args } => {
+            let head_resolved = names.resolve(head);
+            let inner: Vec<String> = args.iter().map(|a| elm_type_name(a, names)).collect();
+            if inner.is_empty() {
+                head_resolved.to_string()
+            } else {
+                format!("{} {}", head_resolved, inner.join(" "))
+            }
         }
     }
 }

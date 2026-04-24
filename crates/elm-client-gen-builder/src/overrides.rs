@@ -84,6 +84,13 @@ impl TypeOverrides {
             ElmTypeRepr::Tuple(elems) => {
                 ElmTypeRepr::Tuple(elems.iter().map(|e| self.rewrite(e)).collect())
             }
+            // Recurse into the args of a type application; the head is
+            // a wrapper name handled separately by the consumer's
+            // NameMap so we don't apply alias rewrites to it.
+            ElmTypeRepr::App { head, args } => ElmTypeRepr::App {
+                head: head.clone(),
+                args: args.iter().map(|a| self.rewrite(a)).collect(),
+            },
             other => other.clone(),
         }
     }
@@ -181,6 +188,8 @@ mod tests {
                     is_optional: false,
                     custom_decoder: None,
                     custom_encoder: None,
+                    decoder_step: None,
+                    encoder_pairs: None,
                 }],
             },
         };
@@ -235,6 +244,8 @@ mod tests {
                             is_optional: true,
                             custom_decoder: None,
                             custom_encoder: None,
+                            decoder_step: None,
+                            encoder_pairs: None,
                         }]),
                     },
                     ElmVariantInfo {

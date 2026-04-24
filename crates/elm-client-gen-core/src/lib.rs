@@ -39,11 +39,31 @@ pub struct ElmFieldInfo {
     /// rather than `required` in the generated decoder.
     pub is_optional: bool,
     /// Override decoder expression set via `#[elm(decoder = "...")]`.
+    /// Emitted as `|> required "rust_name" customDecoder`.
     pub custom_decoder: Option<&'static str>,
     /// Override encoder expression set via `#[elm(encoder = "...")]`.
     /// Applied as `customEncoder value.fieldName` inside the
     /// `Encode.object` list.
     pub custom_encoder: Option<&'static str>,
+    /// Pipeline-step combinator set via `#[elm(decoder_step = "...")]`.
+    /// Emitted as `|> step "rust_name" innerDecoder`, where `innerDecoder`
+    /// is built from the field's inner type (the args of an
+    /// [`ElmTypeRepr::App`], or the field's `elm_type` for non-wrapped
+    /// fields). The combinator must have shape
+    /// `String -> Decoder a -> Decoder (b -> c) -> Decoder c`. Use this
+    /// for wrapper types where absence/presence semantics aren't
+    /// expressible with `required` / `optional` (e.g. PATCH tristate
+    /// fields). Wins over `custom_decoder` when both are set.
+    pub decoder_step: Option<&'static str>,
+    /// Pairs-emitting encoder helper set via `#[elm(encoder_pairs = "...")]`.
+    /// Emitted as `pairsFn "rust_name" innerEncoder record.fieldName`,
+    /// returning `List (String, Value)`. The helper must have shape
+    /// `String -> (a -> Value) -> wrapper a -> List (String, Value)` so
+    /// it can contribute zero or one pair depending on the wrapper's
+    /// state. The outer `Encode.object` is wrapped in `List.concat`
+    /// whenever any field on a record uses this attribute. Wins over
+    /// `custom_encoder` when both are set.
+    pub encoder_pairs: Option<&'static str>,
 }
 
 /// Simplified Elm type tree.
@@ -82,6 +102,20 @@ pub enum ElmTypeRepr {
     /// derives `ElmType`. Consumers may also use this for codebase-specific
     /// types they later remap via the override layer.
     Custom(String),
+    /// A type application: `Head Arg1 Arg2 ...`. Used for user-defined
+    /// wrapper types like `Patch<T>` whose Elm equivalent is
+    /// `Patch State` rather than a plain ident. The codegen renders the
+    /// type position as `Head Arg1 Arg2 ...` (resolving `head` through
+    /// the consumer's `NameMap`) but doesn't know the wrapper's
+    /// codec semantics. Consumers must pair `App` with
+    /// `ElmFieldInfo::decoder_step` and/or `ElmFieldInfo::encoder_pairs`
+    /// on every field that uses the wrapper, supplying the matching
+    /// helper functions; otherwise the generated decoder/encoder will
+    /// reference an undefined identifier.
+    App {
+        head: String,
+        args: Vec<ElmTypeRepr>,
+    },
 }
 
 /// Shape of an enum variant's associated data.

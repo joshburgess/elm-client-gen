@@ -225,6 +225,13 @@ fn build_imports(
     for r in reprs {
         collect_custom_refs(r, &mut custom_refs);
     }
+
+    // Group exposed names by their target module path so multiple Rust
+    // types living in the same Elm module collapse into a single
+    // `import M exposing (..)` statement. (Without this, registering
+    // both `Patch` and `PatchNullable` in the same `Api.Patch` module
+    // would emit two duplicate imports of `Api.Patch`.)
+    let mut by_module: BTreeMap<Vec<String>, BTreeSet<String>> = BTreeMap::new();
     for rust_name in &custom_refs {
         let Some(entry) = names.lookup(rust_name) else {
             continue;
@@ -232,14 +239,23 @@ fn build_imports(
         if entry.module_path == current {
             continue;
         }
-        let module_refs: Vec<&str> = entry.module_path.iter().map(|s| s.as_str()).collect();
-        let decoder = format!("{}Decoder", lcfirst(&entry.elm_name));
-        let encoder = format!("encode{}", entry.elm_name);
-        let mut exposed = vec![entry.elm_name.as_str(), decoder.as_str()];
-        if needs_encoder {
-            exposed.push(encoder.as_str());
+        let bucket = by_module.entry(entry.module_path.clone()).or_default();
+        if let Some(overrides) = entry.exposed_overrides.as_ref() {
+            for s in overrides {
+                bucket.insert(s.clone());
+            }
+        } else {
+            bucket.insert(entry.elm_name.clone());
+            bucket.insert(format!("{}Decoder", lcfirst(&entry.elm_name)));
+            if needs_encoder {
+                bucket.insert(format!("encode{}", entry.elm_name));
+            }
         }
-        imports.push(import_exposing(&module_refs, exposed));
+    }
+    for (module_path, exposed) in &by_module {
+        let module_refs: Vec<&str> = module_path.iter().map(|s| s.as_str()).collect();
+        let exposed_refs: Vec<&str> = exposed.iter().map(|s| s.as_str()).collect();
+        imports.push(import_exposing(&module_refs, exposed_refs));
     }
 
     imports
@@ -394,6 +410,15 @@ fn collect_custom_refs(repr: &ElmTypeRepr, out: &mut BTreeSet<String>) {
                 collect_custom_refs(e, out);
             }
         }
+        // Type applications: the head is treated as a custom reference
+        // (so user-supplied wrappers get imported), and each arg is
+        // recursively scanned for further refs.
+        ElmTypeRepr::App { head, args } => {
+            out.insert(head.clone());
+            for a in args {
+                collect_custom_refs(a, out);
+            }
+        }
         _ => {}
     }
 }
@@ -403,6 +428,7 @@ fn repr_uses_posix(r: &ElmTypeRepr) -> bool {
         ElmTypeRepr::Posix => true,
         ElmTypeRepr::Maybe(i) | ElmTypeRepr::List(i) | ElmTypeRepr::Dict(i) => repr_uses_posix(i),
         ElmTypeRepr::Tuple(elems) => elems.iter().any(repr_uses_posix),
+        ElmTypeRepr::App { args, .. } => args.iter().any(repr_uses_posix),
         _ => false,
     }
 }
@@ -412,6 +438,7 @@ fn repr_uses_value(r: &ElmTypeRepr) -> bool {
         ElmTypeRepr::Value => true,
         ElmTypeRepr::Maybe(i) | ElmTypeRepr::List(i) | ElmTypeRepr::Dict(i) => repr_uses_value(i),
         ElmTypeRepr::Tuple(elems) => elems.iter().any(repr_uses_value),
+        ElmTypeRepr::App { args, .. } => args.iter().any(repr_uses_value),
         _ => false,
     }
 }
@@ -421,6 +448,7 @@ fn repr_uses_dict(r: &ElmTypeRepr) -> bool {
         ElmTypeRepr::Dict(_) => true,
         ElmTypeRepr::Maybe(i) | ElmTypeRepr::List(i) => repr_uses_dict(i),
         ElmTypeRepr::Tuple(elems) => elems.iter().any(repr_uses_dict),
+        ElmTypeRepr::App { args, .. } => args.iter().any(repr_uses_dict),
         _ => false,
     }
 }
@@ -430,6 +458,7 @@ fn repr_uses_maybe(r: &ElmTypeRepr) -> bool {
         ElmTypeRepr::Maybe(_) => true,
         ElmTypeRepr::List(i) | ElmTypeRepr::Dict(i) => repr_uses_maybe(i),
         ElmTypeRepr::Tuple(elems) => elems.iter().any(repr_uses_maybe),
+        ElmTypeRepr::App { args, .. } => args.iter().any(repr_uses_maybe),
         _ => false,
     }
 }
@@ -526,6 +555,8 @@ mod tests {
             is_optional,
             custom_decoder: None,
             custom_encoder: None,
+            decoder_step: None,
+            encoder_pairs: None,
         }
     }
 

@@ -138,15 +138,7 @@ fn build_record_encoder(
     let encoder_name = format!("encode{}", info.type_name);
     let param = "value";
 
-    let field_pairs: Vec<Spanned<Expr>> = fields
-        .iter()
-        .map(|f| build_field_pair(f, var(param), names, maybe))
-        .collect();
-
-    let body = app(
-        elm_ast::builder::qualified(&["Encode"], "object"),
-        vec![list_multiline(field_pairs)],
-    );
+    let body = build_encode_object_body(param, None, fields, names, maybe);
 
     let sig = elm_ast::builder::tfunc(tname(info.type_name, vec![]), tname("Value", vec![]));
 
@@ -268,15 +260,7 @@ fn build_tagged_variant_branch(
     };
 
     let payload_var = "payload";
-    let mut pairs: Vec<Spanned<Expr>> = Vec::with_capacity(fields.len() + 1);
-    pairs.push(tag_pair);
-    for f in fields {
-        pairs.push(build_field_pair(f, var(payload_var), names, maybe));
-    }
-    let body = app(
-        elm_ast::builder::qualified(&["Encode"], "object"),
-        vec![list_multiline(pairs)],
-    );
+    let body = build_encode_object_body(payload_var, Some(tag_pair), fields, names, maybe);
 
     CaseBranch {
         pattern: pctor(v.elm_name, vec![pvar(payload_var)]),
@@ -339,14 +323,7 @@ fn build_untagged_variant_branch(
         }
         ElmVariantPayload::Struct(fields) => {
             let payload_var = "payload";
-            let pairs: Vec<Spanned<Expr>> = fields
-                .iter()
-                .map(|f| build_field_pair(f, var(payload_var), names, maybe))
-                .collect();
-            let body = app(
-                elm_ast::builder::qualified(&["Encode"], "object"),
-                vec![list_multiline(pairs)],
-            );
+            let body = build_encode_object_body(payload_var, None, fields, names, maybe);
             CaseBranch {
                 pattern: pctor(v.elm_name, vec![pvar(payload_var)]),
                 body,
@@ -376,6 +353,83 @@ fn build_field_pair(
         encoder_for_type(&f.elm_type, accessor, names, maybe)
     };
     tuple(vec![string(f.rust_name), encoded])
+}
+
+/// Build the body of an `Encode.object` call from a sequence of fields,
+/// optionally with a fixed prepend pair (used for the discriminator in
+/// internally-tagged enum encoders).
+///
+/// If any field has `#[elm(encoder_pairs = "...")]`, the body is wrapped
+/// in `List.concat [...]` and each field contributes a `List (String, Value)`
+/// — either by calling the user-supplied helper (which can return zero or
+/// more pairs) or by wrapping a single `("key", encoder val)` pair in a
+/// singleton list. Without any such fields the original
+/// `[ ("k", v), ("k2", v2), ... ]` shape is preserved.
+pub(crate) fn build_encode_object_body(
+    record_var: &str,
+    prepend: Option<Spanned<Expr>>,
+    fields: &[ElmFieldInfo],
+    names: &NameMap,
+    maybe: &MaybeEncoderRef,
+) -> Spanned<Expr> {
+    let uses_pairs = fields.iter().any(|f| f.encoder_pairs.is_some());
+    if uses_pairs {
+        let mut entries: Vec<Spanned<Expr>> =
+            Vec::with_capacity(fields.len() + usize::from(prepend.is_some()));
+        if let Some(p) = prepend {
+            entries.push(elm_ast::builder::list(vec![p]));
+        }
+        for f in fields {
+            entries.push(build_field_pair_list(f, var(record_var), names, maybe));
+        }
+        let concat = app(
+            elm_ast::builder::qualified(&["List"], "concat"),
+            vec![list_multiline(entries)],
+        );
+        app(
+            elm_ast::builder::qualified(&["Encode"], "object"),
+            vec![concat],
+        )
+    } else {
+        let mut pairs: Vec<Spanned<Expr>> =
+            Vec::with_capacity(fields.len() + usize::from(prepend.is_some()));
+        if let Some(p) = prepend {
+            pairs.push(p);
+        }
+        for f in fields {
+            pairs.push(build_field_pair(f, var(record_var), names, maybe));
+        }
+        app(
+            elm_ast::builder::qualified(&["Encode"], "object"),
+            vec![list_multiline(pairs)],
+        )
+    }
+}
+
+/// `pairsFn "rust_name" innerEncoder record.fieldName` for fields with
+/// `#[elm(encoder_pairs = "...")]`, or `[ ("rust_name", encoder val) ]`
+/// for plain fields. Used inside the `List.concat [...]` body.
+fn build_field_pair_list(
+    f: &ElmFieldInfo,
+    record: Spanned<Expr>,
+    names: &NameMap,
+    maybe: &MaybeEncoderRef,
+) -> Spanned<Expr> {
+    if let Some(pairs_fn) = f.encoder_pairs {
+        let inner_type = match &f.elm_type {
+            ElmTypeRepr::App { args, .. } if !args.is_empty() => &args[0],
+            other => other,
+        };
+        let inner_encoder = encoder_fn_for_type(inner_type, names, maybe);
+        let accessor = record_access(record, f.elm_name);
+        app(
+            var(pairs_fn),
+            vec![string(f.rust_name), inner_encoder, accessor],
+        )
+    } else {
+        let pair = build_field_pair(f, record, names, maybe);
+        elm_ast::builder::list(vec![pair])
+    }
 }
 
 fn encoder_for_type(
@@ -434,6 +488,18 @@ fn encoder_for_type(
         ElmTypeRepr::Custom(rust_name) => {
             let elm_name = names.resolve(rust_name);
             app(var(format!("encode{}", elm_name)), vec![accessor])
+        }
+        // Type application: build a partially-applied encoder via
+        // `encoder_fn_for_type` and apply it to the accessor. The head's
+        // encoder takes one argument per type parameter (the inner
+        // encoder), then the value. This is the right shape for
+        // wrappers like `Patch a` whose Elm encoder is
+        // `encodePatch : (a -> Value) -> Patch a -> Value`. App-typed
+        // record fields normally pair with `encoder_pairs`, which wins
+        // over the type-driven encoder; this branch is the fallback.
+        ElmTypeRepr::App { .. } => {
+            let head_encoder = encoder_fn_for_type(repr, names, maybe);
+            app(head_encoder, vec![accessor])
         }
     }
 }
@@ -511,6 +577,23 @@ fn encoder_fn_for_type(
             ],
         ),
         ElmTypeRepr::Tuple(elems) => build_tuple_encoder_fn(elems, names, maybe),
+        // `encode<Head> argEnc1 argEnc2 ...` — partially applied encoder
+        // for a type application. The user-supplied head encoder must
+        // accept one inner-encoder per type parameter and return a
+        // `wrapper -> Value` function.
+        ElmTypeRepr::App { head, args } => {
+            let elm_head = names.resolve(head);
+            let head_encoder = var(format!("encode{}", elm_head));
+            if args.is_empty() {
+                head_encoder
+            } else {
+                let arg_encoders: Vec<Spanned<Expr>> = args
+                    .iter()
+                    .map(|a| encoder_fn_for_type(a, names, maybe))
+                    .collect();
+                app(head_encoder, arg_encoders)
+            }
+        }
     }
 }
 

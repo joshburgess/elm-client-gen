@@ -18,11 +18,33 @@ use syn::{
 /// # Field attributes
 ///
 /// - `#[elm(skip)]`: exclude this field from the Elm type
-/// - `#[elm(type = "CustomElmType")]`: override the inferred Elm type
+/// - `#[elm(type = "CustomElmType")]`: override the inferred Elm type.
+///   A multi-token override like `"Patch State"` is parsed as a type
+///   application and emits `ElmTypeRepr::App { head, args }`, which is
+///   typically paired with `decoder_step` / `encoder_pairs` to supply
+///   the wrapper's codec helpers.
 /// - `#[elm(name = "customName")]`: override the camelCase field name
 /// - `#[elm(decoder = "customDecoder")]`: substitute a decoder expression
+///   used with `Json.Decode.Pipeline.required`. For wrapper types where
+///   absence/presence semantics need a different combinator (e.g.
+///   `optional` or a user-supplied `patch` helper), use `decoder_step`
+///   instead.
 /// - `#[elm(encoder = "customEncoder")]`: substitute an encoder function;
-///   applied as `customEncoder value.fieldName` inside `Encode.object`
+///   applied as `customEncoder value.fieldName` inside `Encode.object`.
+///   For wrapper types that may emit zero or more JSON keys (e.g.
+///   PATCH tristate), use `encoder_pairs` instead.
+/// - `#[elm(decoder_step = "patch")]`: substitute the pipeline combinator
+///   itself, not the inner decoder. Emitted as
+///   `|> patch "rust_name" innerDecoder`. The inner decoder is derived
+///   from the type application's first argument (for `App` overrides) or
+///   from the field's underlying Elm type. Wins over `decoder` when both
+///   are set.
+/// - `#[elm(encoder_pairs = "patchPair")]`: substitute a pairs-emitting
+///   helper. Emitted as `patchPair "rust_name" innerEncoder record.fieldName`,
+///   contributing zero or more `(String, Value)` pairs. The enclosing
+///   record's `Encode.object` is rewritten as
+///   `Encode.object (List.concat [...])` whenever any field uses this
+///   attribute. Wins over `encoder` when both are set.
 ///
 /// `#[serde(rename = "...")]` and `#[serde(rename_all = "...")]` are
 /// honored when computing the JSON key.
@@ -229,6 +251,14 @@ fn build_field_info_list(
             Some(e) => quote! { Some(#e) },
             None => quote! { None },
         };
+        let decoder_step_tokens = match &field_attrs.decoder_step {
+            Some(d) => quote! { Some(#d) },
+            None => quote! { None },
+        };
+        let encoder_pairs_tokens = match &field_attrs.encoder_pairs {
+            Some(e) => quote! { Some(#e) },
+            None => quote! { None },
+        };
 
         field_tokens.push(quote! {
             elm_client_gen_core::ElmFieldInfo {
@@ -238,6 +268,8 @@ fn build_field_info_list(
                 is_optional: #is_optional,
                 custom_decoder: #decoder_tokens,
                 custom_encoder: #encoder_tokens,
+                decoder_step: #decoder_step_tokens,
+                encoder_pairs: #encoder_pairs_tokens,
             }
         });
     }
@@ -439,6 +471,8 @@ struct FieldAttrs {
     name: Option<String>,
     decoder: Option<String>,
     encoder: Option<String>,
+    decoder_step: Option<String>,
+    encoder_pairs: Option<String>,
 }
 
 fn parse_field_attrs(attrs: &[Attribute]) -> syn::Result<FieldAttrs> {
@@ -448,6 +482,8 @@ fn parse_field_attrs(attrs: &[Attribute]) -> syn::Result<FieldAttrs> {
         name: None,
         decoder: None,
         encoder: None,
+        decoder_step: None,
+        encoder_pairs: None,
     };
 
     for attr in attrs {
@@ -469,6 +505,12 @@ fn parse_field_attrs(attrs: &[Attribute]) -> syn::Result<FieldAttrs> {
                 Ok(())
             } else if meta.path.is_ident("encoder") {
                 result.encoder = Some(parse_str_value(&meta)?);
+                Ok(())
+            } else if meta.path.is_ident("decoder_step") {
+                result.decoder_step = Some(parse_str_value(&meta)?);
+                Ok(())
+            } else if meta.path.is_ident("encoder_pairs") {
+                result.encoder_pairs = Some(parse_str_value(&meta)?);
                 Ok(())
             } else {
                 Err(meta.error("unknown elm field attribute"))
@@ -672,9 +714,14 @@ fn snake_to_pascal(s: &str) -> String {
 /// `ElmTypeRepr::String` (not `Custom("String")` which would generate
 /// nonsense like `encodeString`/`stringDecoder`).
 ///
-/// `Maybe T` and `List T` wrappers are parsed recursively. Any unknown
-/// shape falls through to `Custom(...)`. Returns the optionality flag
-/// (`true` for `Maybe ...`, matching the auto-detection behavior).
+/// `Maybe T` and `List T` wrappers are parsed recursively. Anything
+/// else of the shape `Head Arg` (head capitalized, arg non-empty) is
+/// parsed as a type application and returns
+/// `ElmTypeRepr::App { head, args: [arg] }`. Multi-argument
+/// applications must parenthesize the arg list and aren't currently
+/// supported beyond a single positional arg. Bare names fall through to
+/// `Custom(...)`. Returns the optionality flag (`true` for `Maybe ...`,
+/// matching the auto-detection behavior).
 fn parse_type_override(s: &str) -> (proc_macro2::TokenStream, bool) {
     let trimmed = s.trim();
     if let Some(rest) = trimmed.strip_prefix("Maybe ") {
@@ -711,6 +758,31 @@ fn parse_type_override(s: &str) -> (proc_macro2::TokenStream, bool) {
     };
     if let Some(tokens) = primitive {
         return (tokens, false);
+    }
+    // Type application: `Head Arg`. Recognized when the first
+    // whitespace-delimited token is a capitalized identifier and the
+    // remainder is non-empty. The remainder is parsed recursively as a
+    // single positional argument (so `Patch State` works; multi-arg
+    // applications would need a richer parser).
+    if let Some((head, rest)) = trimmed.split_once(char::is_whitespace) {
+        let rest = rest.trim();
+        let head_is_ident = !head.is_empty()
+            && head.chars().next().map_or(false, |c| c.is_ascii_uppercase())
+            && head
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_');
+        if head_is_ident && !rest.is_empty() {
+            let (arg_tokens, _) = parse_type_override(rest);
+            return (
+                quote! {
+                    elm_client_gen_core::ElmTypeRepr::App {
+                        head: #head.to_string(),
+                        args: vec![#arg_tokens],
+                    }
+                },
+                false,
+            );
+        }
     }
     (
         quote! { elm_client_gen_core::ElmTypeRepr::Custom(#trimmed.to_string()) },

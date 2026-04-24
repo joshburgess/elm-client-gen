@@ -344,6 +344,21 @@ fn build_struct_variant_decoder_expr(
 }
 
 fn build_field_decoder_step(field: &ElmFieldInfo, names: &NameMap) -> Spanned<elm_ast::expr::Expr> {
+    // Pipeline-step combinator override (`#[elm(decoder_step = "...")]`).
+    // Wins over `custom_decoder`. The combinator must have shape
+    // `String -> Decoder a -> Decoder (b -> c) -> Decoder c`, so the
+    // emitted call is `step "rust_name" innerDecoder`. The inner decoder
+    // is taken from the first argument of an `App` type (the wrapper's
+    // payload type) or from the field's own elm_type for non-App fields.
+    if let Some(step) = field.decoder_step {
+        let inner_type = match &field.elm_type {
+            ElmTypeRepr::App { args, .. } if !args.is_empty() => &args[0],
+            other => other,
+        };
+        let inner_decoder = decoder_for_type(inner_type, names);
+        return app(var(step), vec![string(field.rust_name), inner_decoder]);
+    }
+
     if let Some(custom) = field.custom_decoder {
         return app(var("required"), vec![string(field.rust_name), var(custom)]);
     }
@@ -404,6 +419,25 @@ pub fn decoder_for_type(repr: &ElmTypeRepr, names: &NameMap) -> Spanned<elm_ast:
         ElmTypeRepr::Custom(rust_name) => {
             let elm_name = names.resolve(rust_name);
             var(format!("{}Decoder", lcfirst(elm_name)))
+        }
+        // For type applications (`Patch a` etc.), build a decoder by
+        // applying `<head>Decoder` to each arg's decoder. The head is
+        // resolved through NameMap so user-supplied wrappers are
+        // imported correctly. This branch is rarely taken on its own —
+        // App-typed record fields normally pair with a `decoder_step`
+        // attribute that overrides the default. It exists as a fallback
+        // for cases where an App nests inside another type
+        // (e.g. `Maybe (Patch a)`).
+        ElmTypeRepr::App { head, args } => {
+            let elm_head = names.resolve(head);
+            let head_decoder = var(format!("{}Decoder", lcfirst(elm_head)));
+            if args.is_empty() {
+                head_decoder
+            } else {
+                let arg_decoders: Vec<Spanned<Expr>> =
+                    args.iter().map(|a| decoder_for_type(a, names)).collect();
+                app(head_decoder, arg_decoders)
+            }
         }
     }
 }

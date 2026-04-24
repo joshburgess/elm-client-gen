@@ -8,6 +8,14 @@ use elm_client_gen_core::ElmTypeInfo;
 pub struct NameEntry {
     pub elm_name: String,
     pub module_path: Vec<String>,
+    /// If set, the import emitted for this entry's module exposes
+    /// exactly this list instead of the auto-derived
+    /// `<elm_name>` / `<elm_name>Decoder` / `encode<elm_name>`. Used for
+    /// hand-written helper modules whose codecs don't follow the
+    /// derive-based naming convention (e.g. a `Patch` module that
+    /// exposes free-standing `patch` and `patchPair` helpers in
+    /// addition to the `Patch` type).
+    pub exposed_overrides: Option<Vec<String>>,
 }
 
 /// Resolves Rust type names referenced via `ElmTypeRepr::Custom(_)` to
@@ -29,6 +37,7 @@ impl NameMap {
                 NameEntry {
                     elm_name: info.type_name.to_string(),
                     module_path: info.module_path.iter().map(|s| s.to_string()).collect(),
+                    exposed_overrides: None,
                 },
             );
         }
@@ -48,6 +57,38 @@ impl NameMap {
             NameEntry {
                 elm_name: elm_name.into(),
                 module_path,
+                exposed_overrides: None,
+            },
+        );
+    }
+
+    /// Register a hand-written module entry along with the exact list of
+    /// names to expose when importing from that module. Use this when
+    /// the codec helpers don't follow the auto-derived
+    /// `<elm_name>Decoder`/`encode<elm_name>` convention — for example a
+    /// `Patch` module whose users invoke `patch` (a pipeline-step
+    /// combinator) and `patchPair` (an encoder helper) by name through
+    /// the `decoder_step` / `encoder_pairs` field attributes.
+    ///
+    /// `exposed` is taken as the complete exposing list for imports of
+    /// the registered module: it should include the type name, any
+    /// helper functions referenced by `decoder_step` /
+    /// `encoder_pairs`, and any other names downstream encoders /
+    /// decoders refer to. Multiple entries pointing at the same module
+    /// are merged into one import and their exposing lists unioned.
+    pub fn register_with_exposed(
+        &mut self,
+        rust_name: impl Into<String>,
+        elm_name: impl Into<String>,
+        module_path: Vec<String>,
+        exposed: Vec<String>,
+    ) {
+        self.map.insert(
+            rust_name.into(),
+            NameEntry {
+                elm_name: elm_name.into(),
+                module_path,
+                exposed_overrides: Some(exposed),
             },
         );
     }
