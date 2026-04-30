@@ -62,7 +62,7 @@ encodePerson value =
 | --- | --- |
 | [`elm-client-gen-core`](crates/elm-client-gen-core) | Core types (`ElmTypeInfo`, `ElmTypeRepr`, `ElmType` trait) and the `inventory`-backed registry. Re-exports `#[derive(ElmType)]` behind the default `derive` feature. |
 | [`elm-client-gen-derive`](crates/elm-client-gen-derive) | The `#[derive(ElmType)]` proc-macro plus the `#[elm_endpoint(...)]` attribute macro. Pulled in transitively via the `derive` feature on `elm-client-gen-core` and `elm-client-gen-http`. |
-| [`elm-client-gen-http`](crates/elm-client-gen-http) | HTTP endpoint metadata: the `#[elm_endpoint(...)]` registry plus the `ElmExtractor` / `ElmResponse` traits. Optional Axum integration behind the `axum` feature. |
+| [`elm-client-gen-http`](crates/elm-client-gen-http) | HTTP endpoint metadata: the `#[elm_endpoint(...)]` registry plus the `ElmExtractor` / `ElmResponse` traits. Optional Axum integration behind a per-version `axum-0-6` / `axum-0-7` / `axum-0-8` feature flag (pick exactly one). |
 | [`elm-client-gen-builder`](crates/elm-client-gen-builder) | Turns `ElmTypeInfo` and `ElmEndpointInfo` into `elm-ast` modules. Configurable via `BuildStrategy`, `TypeOverrides`, `MaybeEncoderRef`, and a pluggable `RequestStyle`. |
 | [`elm-client-gen-cli`](crates/elm-client-gen-cli) | Reference binary. Walks the registry, applies overrides, writes one `.elm` file per Elm module path. |
 

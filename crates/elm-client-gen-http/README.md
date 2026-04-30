@@ -13,7 +13,8 @@ for HTTP endpoints:
 - the `ElmResponse` trait that maps each handler return type to an
   Elm response (success body, kind, optional error body),
 - a link-time inventory of registered endpoints,
-- optional Axum integration behind the `axum` feature.
+- optional Axum integration behind a per-version feature flag
+  (`axum-0-6`, `axum-0-7`, or `axum-0-8`; pick exactly one).
 
 Pair with `elm-client-gen-builder`'s `RequestStyle` trait to render the
 collected endpoints as Elm request functions in whatever shape your
@@ -163,13 +164,43 @@ slots (e.g. `PersonId`, `Sqid`).
 
 - **`derive`** *(default)*: re-exports `#[elm_endpoint(...)]` from
   `elm-client-gen-derive`.
-- **`axum`**: enables the bundled impls for standard Axum extractors
-  and response types.
-- **`axum-extra`**: adds the `axum_extra::extract::Query<T>` impl
-  (repeated-key query support). Implies `axum`.
+- **`axum-0-6`** / **`axum-0-7`** / **`axum-0-8`**: enable the bundled
+  impls for the standard Axum extractors and response types against
+  that major-minor version of Axum. **Mutually exclusive**: enabling
+  more than one is a compile-time error. Pick the one that matches
+  your downstream Axum dependency.
+- **`axum-extra-0-7`** / **`axum-extra-0-9`** / **`axum-extra-0-10`**:
+  adds the `axum_extra::extract::Query<T>` impl (repeated-key query
+  support) for the matching `axum-extra` release. Each
+  `axum-extra-X-Y` flag implies its companion `axum-X-Y` flag, so you
+  do not need to enable both.
 - **`uuid`**: adds `ElmScalar for uuid::Uuid` (maps to Elm `String`).
 
-## Bundled Axum impls (`axum` feature)
+### Axum version compatibility matrix
+
+| Feature flag | Axum | Axum Extra |
+| --- | --- | --- |
+| `axum-0-6` (+ `axum-extra-0-7`) | `0.6` | `0.7` |
+| `axum-0-7` (+ `axum-extra-0-9`) | `0.7` | `0.9` |
+| `axum-0-8` (+ `axum-extra-0-10`) | `0.8` | `0.10` |
+
+In your downstream `Cargo.toml`:
+
+```toml
+# Pick exactly one row.
+elm-client-gen-http = { version = "0.4", features = ["derive", "axum-extra-0-10"] }
+# elm-client-gen-http = { version = "0.4", features = ["derive", "axum-extra-0-9"] }
+# elm-client-gen-http = { version = "0.4", features = ["derive", "axum-extra-0-7"] }
+```
+
+> **Note**: `cargo check --all-features` does **not** work in this
+> workspace because the per-version impls collide on shared types
+> (`StatusCode`, `Bytes`). When checking the crate locally, iterate
+> the supported combos one at a time. The repo ships an `xtask`
+> runner for this: `cargo xtask preflight` runs fmt-check, clippy,
+> and tests across every supported combo.
+
+## Bundled Axum impls (`axum-0-X` features)
 
 ### Extractors
 
@@ -181,7 +212,7 @@ slots (e.g. `PersonId`, `Sqid`).
 | `axum::body::Bytes` | `Body { kind: Bytes, ty: "Bytes.Bytes" }` |
 | `String` | `Body { kind: Text, ty: String }` |
 | `axum::extract::Query<T: ElmQueryStruct>` | `QueryParams(T::query_params())` |
-| `axum_extra::extract::Query<T>` *(axum-extra)* | `QueryParams(...)`, same shape |
+| `axum_extra::extract::Query<T>` *(axum-extra-X-Y)* | `QueryParams(...)`, same shape |
 | `axum::extract::Path<T: ElmPathParams>` | `PathParams(T::path_params())` |
 
 ### Responses
