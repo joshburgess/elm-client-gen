@@ -9,6 +9,11 @@ env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-D warnings"
 
+# `cargo --all-features` is not viable here: elm-client-gen-http's
+# `axum-0-6` / `axum-0-7` / `axum-0-8` features pull in incompatible
+# impls on shared types (StatusCode, Bytes) and a compile_error guard
+# fires when more than one is enabled. Iterate combos instead.
+
 jobs:
   lint:
     name: Lint
@@ -25,9 +30,9 @@ jobs:
         with:
           cache-on-failure: true
       - name: Rustfmt
-        run: cargo fmt --all -- --check
-      - name: Clippy
-        run: cargo clippy --workspace --all-features --all-targets --profile ci -- -D warnings
+        run: cargo xtask fmt-check
+      - name: Clippy across feature combos
+        run: cargo xtask check-features
 
   test:
     name: Test
@@ -41,14 +46,26 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
-      - name: Test
-        run: cargo test --workspace --all-features --profile ci
+      - name: Test across feature combos
+        run: cargo xtask test-features
 
   docs:
-    name: Docs
+    name: Docs (${{ matrix.label }})
     runs-on: ubuntu-latest
     env:
       RUSTDOCFLAGS: "-D warnings"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: baseline
+            features: derive,uuid
+          - label: axum-0-6
+            features: derive,uuid,axum-extra-0-7
+          - label: axum-0-7
+            features: derive,uuid,axum-extra-0-9
+          - label: axum-0-8
+            features: derive,uuid,axum-extra-0-10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -58,8 +75,11 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
+          key: docs-${{ matrix.label }}
       - name: Build docs
-        run: cargo doc --workspace --all-features --no-deps
+        run: |
+          cargo doc --workspace --exclude xtask --no-deps \
+            --no-default-features --features ${{ matrix.features }}
 
   release-build:
     name: Release Build
@@ -74,7 +94,11 @@ jobs:
         with:
           cache-on-failure: true
           key: release
+      # The CLI does not depend on any axum feature, so we build with the
+      # latest supported axum combo as the representative release shape.
       - name: Build workspace (release)
-        run: cargo build --workspace --all-features --release
+        run: |
+          cargo build --workspace --exclude xtask --release \
+            --no-default-features --features derive,uuid,axum-extra-0-10
       - name: Verify CLI binary
         run: ./target/release/elm-client-gen --help
