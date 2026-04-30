@@ -16,7 +16,7 @@ use crate::decoder::{build_decoder, lcfirst};
 use crate::encoder::{
     build_encoder, build_merge_tagged_object_helper, needs_merge_tagged_object_helper,
 };
-use crate::helpers::{import_as_exposing, import_exposing, on_distinct_lines};
+use crate::helpers::{import_as, import_as_exposing, import_exposing, on_distinct_lines};
 use crate::name_map::NameMap;
 use crate::strategy::BuildStrategy;
 use crate::type_builder::build_type_declaration;
@@ -174,11 +174,10 @@ fn build_imports(
     names: &NameMap,
     maybe: &MaybeEncoderRef,
 ) -> Vec<Spanned<Import>> {
-    let mut imports = vec![import_as_exposing(
-        &["Json", "Decode"],
-        "Decode",
-        vec!["Decoder"],
-    )];
+    // `import Json.Decode as Decode` (no exposing). Every decoder we
+    // emit refers to the type as `Decode.Decoder`, so the previously
+    // exposed bare `Decoder` was dead.
+    let mut imports = vec![import_as(&["Json", "Decode"], "Decode")];
 
     // Only import Json.Decode.Pipeline when we actually generate a
     // pipeline-style decoder (records or enum struct variants), and

@@ -26,7 +26,7 @@ Run the CLI and you get `Api/Person.elm` containing:
 ```elm
 module Api.Person exposing (Person, personDecoder, encodePerson)
 
-import Json.Decode as Decode exposing (Decoder)
+import Json.Decode as Decode
 import Json.Decode.Pipeline exposing (required, optional)
 import Json.Encode as Encode exposing (Value)
 import Json.Encode.Extra exposing (maybe)
@@ -39,7 +39,7 @@ type alias Person =
     }
 
 
-personDecoder : Decoder Person
+personDecoder : Decode.Decoder Person
 personDecoder =
     Decode.succeed Person
         |> required "id" Decode.string
