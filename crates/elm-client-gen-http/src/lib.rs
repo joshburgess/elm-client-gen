@@ -62,14 +62,18 @@ pub struct QueryParam {
 }
 
 /// One header an endpoint expects in the Elm function signature.
-///
-/// Auth tokens and similar implicit headers should not appear here;
-/// they're handled by the `RequestStyle` impl.
 #[derive(Clone, Debug)]
 pub struct HeaderInfo {
     pub name: &'static str,
     pub ty: ElmTypeRepr,
     pub required: bool,
+    pub value_style: HeaderValueStyle,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HeaderValueStyle {
+    Raw,
+    Prefix(&'static str),
 }
 
 /// How a request body is encoded on the wire. Drives which

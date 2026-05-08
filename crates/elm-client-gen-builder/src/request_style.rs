@@ -425,7 +425,10 @@ fn build_header(header: &elm_client_gen_http::HeaderInfo) -> Spanned<Expr> {
         qualified(&["Http"], "header"),
         vec![
             string(header.name),
-            stringify_param(field(&header_name_to_field_name(header.name)), &header.ty),
+            build_header_value(
+                stringify_param(field(&header_name_to_field_name(header.name)), &header.ty),
+                header.value_style,
+            ),
         ],
     )
 }
@@ -435,7 +438,10 @@ fn build_optional_header(header: &elm_client_gen_http::HeaderInfo) -> Spanned<Ex
         qualified(&["Http"], "header"),
         vec![
             string(header.name),
-            stringify_param(var("value"), &header.ty),
+            build_header_value(
+                stringify_param(var("value"), &header.ty),
+                header.value_style,
+            ),
         ],
     );
     app(
@@ -445,6 +451,16 @@ fn build_optional_header(header: &elm_client_gen_http::HeaderInfo) -> Spanned<Ex
             field(&header_name_to_field_name(header.name)),
         ],
     )
+}
+
+fn build_header_value(
+    value: Spanned<Expr>,
+    style: elm_client_gen_http::HeaderValueStyle,
+) -> Spanned<Expr> {
+    match style {
+        elm_client_gen_http::HeaderValueStyle::Raw => value,
+        elm_client_gen_http::HeaderValueStyle::Prefix(prefix) => concat(string(prefix), value),
+    }
 }
 
 /// Build the URL expression by coalescing literal segments and
@@ -682,8 +698,8 @@ mod tests {
     use elm_ast::builder::module;
     use elm_client_gen_core::ElmTypeInfo;
     use elm_client_gen_http::{
-        BodyKind, ElmEndpointInfo, ExtractorInfo, HeaderInfo, HttpMethod, PathParam, ResponseInfo,
-        ResponseKind,
+        BodyKind, ElmEndpointInfo, ExtractorInfo, HeaderInfo, HeaderValueStyle, HttpMethod,
+        PathParam, ResponseInfo, ResponseKind,
     };
 
     fn json_response(name: &str) -> ResponseInfo {
@@ -836,6 +852,7 @@ mod tests {
                     name: "Authorization",
                     ty: ElmTypeRepr::String,
                     required: true,
+                    value_style: HeaderValueStyle::Raw,
                 }),
             ],
             response: json_response("Person"),
@@ -850,6 +867,37 @@ mod tests {
         assert!(
             out.contains(r#"Http.header "Authorization" params.authorization"#),
             "header not emitted:\n{out}"
+        );
+    }
+
+    #[test]
+    fn renders_prefixed_headers() {
+        let info = ElmEndpointInfo {
+            handler_name: "get_person",
+            elm_function_name: "getPerson",
+            elm_module_path: &["Api", "Generated", "Person"],
+            method: HttpMethod::Get,
+            path_template: "/api/v1/persons/{person_id}",
+            params: vec![
+                ExtractorInfo::PathParams(vec![PathParam {
+                    name: "person_id",
+                    ty: ElmTypeRepr::String,
+                }]),
+                ExtractorInfo::Header(HeaderInfo {
+                    name: "Authorization",
+                    ty: ElmTypeRepr::String,
+                    required: true,
+                    value_style: HeaderValueStyle::Prefix("Bearer "),
+                }),
+            ],
+            response: json_response("Person"),
+            tags: &[],
+        };
+        let out = render(&info, &name_map());
+
+        assert!(
+            out.contains(r#"Http.header "Authorization" ("Bearer " ++ params.authorization)"#),
+            "prefixed header not emitted:\n{out}"
         );
     }
 

@@ -561,6 +561,7 @@ mod tests {
                     name: "X-Trace-Id",
                     ty: ElmTypeRepr::String,
                     required: false,
+                    value_style: elm_client_gen_http::HeaderValueStyle::Raw,
                 }),
             ],
         );
