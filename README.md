@@ -271,6 +271,62 @@ Extractors are inspected via `ElmExtractor` trait impls: `Path<T>` and
 / `String` / `Bytes` become typed request bodies, and `State<T>` (and
 anything else you tag with `ExtractorInfo::Skip`) is ignored.
 
+### Request headers
+
+Use `ExtractorInfo::Header` for values that the generated Elm request
+function should accept and pass through as HTTP headers. This is useful
+for auth tokens, request ids, tenant ids, and other per-call values.
+
+```rust
+use elm_client_gen_core::ElmTypeRepr;
+use elm_client_gen_http::{
+    ElmExtractor, ExtractorInfo, HeaderInfo, HeaderValueStyle,
+};
+
+pub struct AuthToken(pub String);
+
+impl ElmExtractor for AuthToken {
+    fn elm_extractor_info() -> ExtractorInfo {
+        ExtractorInfo::Header(HeaderInfo {
+            name: "Authorization",
+            ty: ElmTypeRepr::String,
+            required: true,
+            value_style: HeaderValueStyle::Prefix("Bearer "),
+        })
+    }
+}
+
+#[elm_client_gen_http::elm_endpoint(
+    GET, "/api/v1/persons/{person_id}",
+    module = "Api.Generated.Person",
+    name = "getPerson",
+)]
+async fn get_person(
+    Path(person_id): Path<String>,
+    auth: AuthToken,
+) -> Result<Json<PersonApi>, HttpError> { /* ... */ }
+```
+
+`DefaultRequestStyle` turns that into a params field named from the
+header, lowercased and camel-cased:
+
+```elm
+getPerson :
+    { baseUrl : String
+    , personId : String
+    , authorization : String
+    , toMsg : Result Http.Error Person -> msg
+    }
+    -> Cmd msg
+
+Http.header "Authorization" ("Bearer " ++ params.authorization)
+```
+
+Use `HeaderValueStyle::Raw` when the caller should provide the exact
+wire value. Mark a header `required: false` to expose it as
+`Maybe <type>` in Elm; the default style omits the header when the
+field is `Nothing`.
+
 See `elm-client-gen-http` for the full trait surface and bundled Axum
 impls.
 

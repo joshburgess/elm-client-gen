@@ -80,6 +80,28 @@ Body kinds drive which `Http.xBody` constructor the codegen emits:
 | `Form` | `application/x-www-form-urlencoded` | the typed payload `T` |
 | `Bytes` | `application/octet-stream` | `Bytes.Bytes` |
 
+Headers become fields on the generated Elm request params record:
+
+```rust
+pub struct HeaderInfo {
+    pub name: &'static str,
+    pub ty: ElmTypeRepr,
+    pub required: bool,
+    pub value_style: HeaderValueStyle,
+}
+
+pub enum HeaderValueStyle {
+    Raw,
+    Prefix(&'static str),
+}
+```
+
+`HeaderValueStyle::Raw` passes the Elm field through unchanged.
+`HeaderValueStyle::Prefix("Bearer ")` renders a header value like
+`"Bearer " ++ params.authorization`. If `required` is `false`, the Elm
+field is `Maybe <type>` and `DefaultRequestStyle` omits the header when
+the value is `Nothing`.
+
 ### Responses (`ResponseInfo`)
 
 ```rust
@@ -247,6 +269,35 @@ impl ElmExtractor for AuthedUser {
         ExtractorInfo::Skip
     }
 }
+```
+
+For request headers, return `ExtractorInfo::Header`:
+
+```rust
+use elm_client_gen_core::ElmTypeRepr;
+use elm_client_gen_http::{
+    ElmExtractor, ExtractorInfo, HeaderInfo, HeaderValueStyle,
+};
+
+pub struct AuthToken(pub String);
+
+impl ElmExtractor for AuthToken {
+    fn elm_extractor_info() -> ExtractorInfo {
+        ExtractorInfo::Header(HeaderInfo {
+            name: "Authorization",
+            ty: ElmTypeRepr::String,
+            required: true,
+            value_style: HeaderValueStyle::Prefix("Bearer "),
+        })
+    }
+}
+```
+
+With `DefaultRequestStyle`, the generated Elm function takes an
+`authorization : String` field and emits:
+
+```elm
+Http.header "Authorization" ("Bearer " ++ params.authorization)
 ```
 
 ## Custom response types

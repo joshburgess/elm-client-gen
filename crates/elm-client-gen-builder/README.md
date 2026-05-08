@@ -158,8 +158,9 @@ outside the derive set, etc.).
 Controls how one `EndpointSlots` becomes one Elm function declaration.
 `DefaultRequestStyle` emits a plain `elm/http` `Http.request` call and
 dispatches on `BodyKind` / `ResponseKind` to pick the right
-`Http.xBody` and `Http.expectX`. It skips query params and headers and
-treats the error body as opaque.
+`Http.xBody` and `Http.expectX`. It includes headers declared through
+`ExtractorInfo::Header`, skips query params, and treats the error body
+as opaque.
 
 Projects with their own request conventions (auto-injected auth
 headers, tagged error envelopes, rate limiting) should implement
