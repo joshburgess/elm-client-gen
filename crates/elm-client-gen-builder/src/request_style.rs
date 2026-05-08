@@ -8,11 +8,12 @@
 //! call. It dispatches on `BodyKind` and `ResponseKind` to pick the
 //! right `Http.xBody` / `Http.expectX` and the right Elm field types
 //! for `body` and the `toMsg` argument. It still skips query params
-//! and headers and treats the error body as opaque; richer error
-//! decoding belongs in a custom `RequestStyle`.
+//! and treats the error body as opaque; richer error decoding belongs
+//! in a custom `RequestStyle`.
 
 use elm_ast::builder::{
-    app, func_with_sig, pvar, qualified, spanned, string, tfunc, tname, tunit, tvar, var,
+    app, func_with_sig, lambda, list, pvar, qualified, spanned, string, tfunc, tname, tunit, tvar,
+    var,
 };
 use elm_ast::declaration::Declaration;
 use elm_ast::expr::Expr;
@@ -44,7 +45,7 @@ pub struct RequestFunctionOutput {
 /// types).
 ///
 /// Implementations can ignore parts of `EndpointSlots` they don't
-/// support (the default ignores `query` and `headers`).
+/// support (the default ignores `query`).
 pub trait RequestStyle {
     fn build_request_function(
         &self,
@@ -57,7 +58,7 @@ pub trait RequestStyle {
 /// Reference impl: vanilla `elm/http` `Http.request` call.
 ///
 /// Limitations:
-/// - Skips query params and headers.
+/// - Skips query params.
 /// - Treats the error body as opaque (`Result Http.Error a`).
 /// - Body is encoded with `encode<TypeName>` (looked up via NameMap).
 pub struct DefaultRequestStyle;
@@ -278,6 +279,13 @@ fn build_signature(
         }
     }
 
+    for header in &endpoint.headers {
+        record_fields.push((
+            Box::leak(header_name_to_field_name(header.name).into_boxed_str()),
+            header_field_type(header.ty.clone(), header.required, names),
+        ));
+    }
+
     if let Some(body_ty) = body.body_field_type.clone() {
         record_fields.push(("body", body_ty));
     }
@@ -376,7 +384,7 @@ fn build_request_body(
 
     let request_record = record_multiline(vec![
         ("method", string(endpoint.method.as_str())),
-        ("headers", elm_ast::builder::list(vec![])),
+        ("headers", build_headers(&endpoint.headers)),
         ("url", url_expr),
         ("body", body_expr),
         ("expect", expect_expr),
@@ -385,6 +393,58 @@ fn build_request_body(
     ]);
 
     app(qualified(&["Http"], "request"), vec![request_record])
+}
+
+fn build_headers(headers: &[&elm_client_gen_http::HeaderInfo]) -> Spanned<Expr> {
+    if headers.iter().all(|header| header.required) {
+        list(headers.iter().map(|header| build_header(header)).collect())
+    } else {
+        app(
+            qualified(&["List"], "filterMap"),
+            vec![
+                var("identity"),
+                list(
+                    headers
+                        .iter()
+                        .map(|header| {
+                            if header.required {
+                                app(var("Just"), vec![build_header(header)])
+                            } else {
+                                build_optional_header(header)
+                            }
+                        })
+                        .collect(),
+                ),
+            ],
+        )
+    }
+}
+
+fn build_header(header: &elm_client_gen_http::HeaderInfo) -> Spanned<Expr> {
+    app(
+        qualified(&["Http"], "header"),
+        vec![
+            string(header.name),
+            stringify_param(field(&header_name_to_field_name(header.name)), &header.ty),
+        ],
+    )
+}
+
+fn build_optional_header(header: &elm_client_gen_http::HeaderInfo) -> Spanned<Expr> {
+    let header_expr = app(
+        qualified(&["Http"], "header"),
+        vec![
+            string(header.name),
+            stringify_param(var("value"), &header.ty),
+        ],
+    );
+    app(
+        qualified(&["Maybe"], "map"),
+        vec![
+            lambda(vec![pvar("value")], header_expr),
+            field(&header_name_to_field_name(header.name)),
+        ],
+    )
 }
 
 /// Build the URL expression by coalescing literal segments and
@@ -442,7 +502,8 @@ fn stringify_param(accessor: Spanned<Expr>, ty: &ElmTypeRepr) -> Spanned<Expr> {
         ElmTypeRepr::String | ElmTypeRepr::IsoDate => accessor,
         ElmTypeRepr::Int => app(qualified(&["String"], "fromInt"), vec![accessor]),
         ElmTypeRepr::Float => app(qualified(&["String"], "fromFloat"), vec![accessor]),
-        // Bool, Posix, Value, Maybe, List, Dict, Custom: out of scope
+        ElmTypeRepr::Bool => app(qualified(&["String"], "fromBool"), vec![accessor]),
+        // Posix, Value, Maybe, List, Dict, Custom: out of scope
         // for URL path slots. Pass through and let Elm's type checker
         // surface the issue at the call site.
         _ => accessor,
@@ -467,6 +528,15 @@ fn field(name: &str) -> Spanned<Expr> {
         record: Box::new(var("params")),
         field: spanned(name.to_string()),
     })
+}
+
+fn header_field_type(ty: ElmTypeRepr, required: bool, names: &NameMap) -> Spanned<TypeAnnotation> {
+    let ann = elm_type_annotation(&ty, names);
+    if required {
+        ann
+    } else {
+        tname("Maybe", vec![ann])
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -597,6 +667,10 @@ fn snake_to_camel(s: &str) -> String {
     out
 }
 
+fn header_name_to_field_name(name: &str) -> String {
+    snake_to_camel(&name.to_ascii_lowercase().replace('-', "_"))
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -608,7 +682,8 @@ mod tests {
     use elm_ast::builder::module;
     use elm_client_gen_core::ElmTypeInfo;
     use elm_client_gen_http::{
-        BodyKind, ElmEndpointInfo, ExtractorInfo, HttpMethod, PathParam, ResponseInfo, ResponseKind,
+        BodyKind, ElmEndpointInfo, ExtractorInfo, HeaderInfo, HttpMethod, PathParam, ResponseInfo,
+        ResponseKind,
     };
 
     fn json_response(name: &str) -> ResponseInfo {
@@ -741,6 +816,40 @@ mod tests {
         assert!(
             out.contains("encodeCreatePerson"),
             "missing encodeCreatePerson exposure:\n{out}",
+        );
+    }
+
+    #[test]
+    fn renders_required_headers() {
+        let info = ElmEndpointInfo {
+            handler_name: "get_person",
+            elm_function_name: "getPerson",
+            elm_module_path: &["Api", "Generated", "Person"],
+            method: HttpMethod::Get,
+            path_template: "/api/v1/persons/{person_id}",
+            params: vec![
+                ExtractorInfo::PathParams(vec![PathParam {
+                    name: "person_id",
+                    ty: ElmTypeRepr::String,
+                }]),
+                ExtractorInfo::Header(HeaderInfo {
+                    name: "Authorization",
+                    ty: ElmTypeRepr::String,
+                    required: true,
+                }),
+            ],
+            response: json_response("Person"),
+            tags: &[],
+        };
+        let out = render(&info, &name_map());
+
+        assert!(
+            out.contains("authorization : String"),
+            "missing header field:\n{out}"
+        );
+        assert!(
+            out.contains(r#"Http.header "Authorization" params.authorization"#),
+            "header not emitted:\n{out}"
         );
     }
 
