@@ -23,7 +23,7 @@ elm-client-gen-derive = { path = "crates/elm-client-gen-derive", version = "0.4.
 elm-client-gen-builder = { path = "crates/elm-client-gen-builder", version = "0.4.2" }
 elm-client-gen-http = { path = "crates/elm-client-gen-http", version = "0.4.2" }
 
-elm-ast = "0.2.0"
+elm-ast = "0.2.1"
 inventory = "0.3"
 anyhow = "1.0"
 syn = { version = "2", features = ["full"] }
